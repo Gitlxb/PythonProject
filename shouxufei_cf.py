@@ -288,13 +288,17 @@ def shouxufei_cf_xzy():
                                 ws[f'{col}{row}'].fill = yellow_fill
                         
                         # 招商银行标记
-                        if ws[f'H{row}'].value and '招商银行' in str(ws[f'H{row}'].value):
-                            for col in ['D', 'E', 'F', 'G', 'H']:
-                                ws[f'{col}{row}'].fill = yellow_fill
-                        
-                        # 伟明 + 中信银行标记
                         c_value = ws[f'C{row}'].value
                         h_value = ws[f'H{row}'].value
+
+                        # 伟明 + 招商银行：不标黄
+                        if c_value and '伟明' in str(c_value) and h_value and '招商银行' in str(h_value):
+                            pass
+                        elif h_value and '招商银行' in str(h_value):
+                            for col in ['D', 'E', 'F', 'G', 'H']:
+                                ws[f'{col}{row}'].fill = yellow_fill
+
+                        # 伟明 + 中信银行标记
                         if c_value and '伟明' in str(c_value) and h_value and '中信银行' in str(h_value):
                             for col in ['D', 'E', 'F', 'G', 'H']:
                                 ws[f'{col}{row}'].fill = yellow_fill
