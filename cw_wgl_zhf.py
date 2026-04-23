@@ -109,9 +109,10 @@ def prepare_raw(raw: pd.DataFrame) -> pd.DataFrame:
     df["入职日期_dt"] = to_date(df["入职日期"])
     df["离职日期_dt"] = to_date(df["离职日期"])
 
-    # 清理项目驻场和项目经理列
+    # 优先使用同名列
     df["项目驻场"] = df["项目驻场"].astype(str).str.strip().replace({"": np.nan, "nan": np.nan})
-    df["项目经理"] = df["项目经理"].astype(str).str.strip().replace({"": np.nan, "nan": np.nan})
+    if "项目经理" in raw.columns:
+        df["项目经理"] = raw["项目经理"].astype(str).str.strip().replace({"": np.nan, "nan": np.nan})
     return df
 
 
@@ -333,14 +334,6 @@ def round_half_up(value, decimals=2):
     return float(rounded)
 
 
-def is_valid_settlement_value(val) -> bool:
-    """判断工厂实际结算值是否有效（非空且长度合理）"""
-    if pd.isna(val) or val == '':
-        return False
-    str_val = str(val).strip()
-    return 0 < len(str_val) <= 50
-
-
 def build_stability_sheet(df: pd.DataFrame, month: str, zc_refresh_df: pd.DataFrame) -> pd.DataFrame:
     """
     构建稳岗率表
@@ -418,8 +411,21 @@ def build_stability_sheet(df: pd.DataFrame, month: str, zc_refresh_df: pd.DataFr
 
     # 检查是否找到列，只要是有效值就计数（不需要是数字）
     if settlement_col is not None:
+        # 判断是否为有效值：非空且不是乱码（字符串长度合理）
+        def is_valid_value(val):
+            if pd.isna(val) or val == '':
+                return False
+            # 转换为字符串，排除明显的乱码（如过长的字符串）
+            str_val = str(val).strip()
+            if len(str_val) == 0:
+                return False
+            # 如果字符串过长（超过 50 个字符），可能是乱码
+            if len(str_val) > 50:
+                return False
+            return True
+
         # 同时满足两个条件：项目驻场有效 + 工厂实际结算有效
-        g_valid = g[g[settlement_col].apply(is_valid_settlement_value)].copy()
+        g_valid = g[g[settlement_col].apply(is_valid_value)].copy()
         print(f"原始数据行数：{len(g)}, 过滤后的有效数据行数：{len(g_valid)}")
     else:
         # 如果没有该列，使用所有数据
@@ -693,7 +699,17 @@ def build_stability_sheet_pm(df: pd.DataFrame, month: str, pm_refresh_df: pd.Dat
 
     # 检查是否找到列，只要是有效值就计数
     if settlement_col is not None:
-        g_valid = g[g[settlement_col].apply(is_valid_settlement_value)].copy()
+        def is_valid_value(val):
+            if pd.isna(val) or val == '':
+                return False
+            str_val = str(val).strip()
+            if len(str_val) == 0:
+                return False
+            if len(str_val) > 50:
+                return False
+            return True
+
+        g_valid = g[g[settlement_col].apply(is_valid_value)].copy()
         print(f"项目经理原始数据行数：{len(g)}, 过滤后的有效数据行数：{len(g_valid)}")
     else:
         print("警告：未找到包含'工厂实际结算'的列，使用所有数据")
