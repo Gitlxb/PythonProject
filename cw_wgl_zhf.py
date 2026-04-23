@@ -525,8 +525,9 @@ def build_stability_sheet(df: pd.DataFrame, month: str, zc_refresh_df: pd.DataFr
 
         # 计算稳岗率与基准数的差值，每 5% 为一档
         diff = rate - base_rate
-        # 计算档位：除以 0.05 后向下取整
-        gear = math.floor(diff / 0.05)
+        # 计算档位：加一个小 epsilon 避免浮点数精度问题，然后除以 0.05 后向下取整
+        # 例如：0.83-0.68=0.15，0.15/0.05=3.0，加 epsilon 后确保 floor 得到正确结果
+        gear = math.floor((diff / 0.05) + 1e-9)
 
         # 根据档位计算单价
         if gear >= 6:
@@ -793,8 +794,8 @@ def build_stability_sheet_pm(df: pd.DataFrame, month: str, pm_refresh_df: pd.Dat
 
         # 计算稳岗率与基准数的差值，每 5% 为一档
         diff = rate - base_rate
-        # 计算档位：除以 0.05 后向下取整
-        gear = math.floor(diff / 0.05)
+        # 计算档位：加一个小 epsilon 避免浮点数精度问题，然后除以 0.05 后向下取整
+        gear = math.floor((diff / 0.05) + 1e-9)
 
         # 根据档位计算单价
         if gear >= 6:
@@ -847,7 +848,7 @@ def build_stability_sheet_pm(df: pd.DataFrame, month: str, pm_refresh_df: pd.Dat
     return out
 
 
-def build_reward_sheet(stability_zc: pd.DataFrame, stability_pm: pd.DataFrame, raw_data: pd.DataFrame) -> pd.DataFrame:
+def build_reward_sheet(stability_zc: pd.DataFrame, stability_pm: pd.DataFrame) -> pd.DataFrame:
     """
     构建奖励汇总表
     表结构：姓名 | 入职补贴（5元/人）| 稳岗补贴_驻场 | 入职补贴（1元/人）| 稳岗补贴_经理 | 合计 | 备注
@@ -1048,7 +1049,7 @@ def main() -> None:
     stability_pm = build_stability_sheet_pm(data, target_month, pm_refresh)
     stability_combined = build_stability_sheet_combined(stability_zc.copy(), stability_pm.copy())
 
-    reward = build_reward_sheet(stability_zc, stability_pm, data)
+    reward = build_reward_sheet(stability_zc, stability_pm)
 
     # 从稳岗率表中提取基准数
     # 项目驻场基准数：查找"平均数"或"中位数"行的稳岗率值

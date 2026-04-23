@@ -7,8 +7,7 @@
 
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
-from pathlib import Path
-import sys
+
 import pandas as pd
 
 # 导入分析函数
@@ -23,8 +22,7 @@ from cw_wgl_zhf import (
     build_stability_sheet_combined,
     build_reward_sheet,
     build_base_rate_sheet,
-    save_output,
-    round_half_up
+    save_output
 )
 
 
@@ -227,12 +225,12 @@ class ExcelAnalysisApp:
         """选择 Excel 文件"""
         try:
             self.input_file = choose_excel_file()
-                
+
             # 如果用户取消选择,返回初始界面
             if self.input_file is None:
                 self.status_var.set("已取消选择")
                 return
-                
+
             self.status_var.set(f"已选择:{self.input_file.name}")
 
             # 读取 Excel 文件的所有工作表
@@ -293,7 +291,7 @@ class ExcelAnalysisApp:
             stability_zc = build_stability_sheet(self.raw_data, self.target_month, zc_refresh)
             stability_pm = build_stability_sheet_pm(self.raw_data, self.target_month, pm_refresh)
             stability_combined = build_stability_sheet_combined(stability_zc.copy(), stability_pm.copy())
-            reward = build_reward_sheet(stability_zc, stability_pm, self.raw_data)
+            reward = build_reward_sheet(stability_zc, stability_pm)
 
             # 提取基准数
             zc_avg_row = stability_zc[stability_zc["项目驻场"] == "平均数"]
@@ -344,7 +342,6 @@ class ExcelAnalysisApp:
             self.output_file = save_output(
                 self.input_file,
                 self.outputs,
-                self.selected_sheet,
                 copy_original_sheets=self.copy_original_sheets.get()
             )
             self.status_var.set(f"已保存：{self.output_file.name}")
