@@ -2,8 +2,6 @@
 Excel汇总处理工具
 根据备注2列内容缩写，汇总打款金额，生成供应商汇总表
 """
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, scrolledtext
 import pandas as pd
 import openpyxl
 from openpyxl import load_workbook
@@ -15,6 +13,83 @@ import traceback
 from typing import Dict, List, Set, Tuple, Any, Optional
 import warnings
 warnings.filterwarnings('ignore')
+
+
+# ==================== 公共工具函数 ====================
+
+def apply_excel_styles(ws: openpyxl.worksheet.worksheet.Worksheet, df: pd.DataFrame) -> None:
+    """应用统一的Excel样式：表头蓝色背景、数据行居中边框、自动列宽"""
+    header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    border = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin')
+    )
+
+    for col in range(1, df.shape[1] + 1):
+        cell = ws.cell(row=1, column=col)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        cell.border = border
+
+    for row_idx in range(2, df.shape[0] + 2):
+        for col_idx in range(1, df.shape[1] + 1):
+            cell = ws.cell(row=row_idx, column=col_idx)
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+            cell.border = border
+
+    for col in range(1, df.shape[1] + 1):
+        max_length = 0
+        column_letter = get_column_letter(col)
+        for row_idx in range(1, df.shape[0] + 2):
+            cell = ws.cell(row=row_idx, column=col)
+            if cell.value:
+                max_length = max(max_length, len(str(cell.value)))
+        adjusted_width = min(max_length + 2, 30)
+        ws.column_dimensions[column_letter].width = max(adjusted_width, 10)
+
+
+def match_month_in_text(month: str, text: str) -> bool:
+    """精确匹配月份字符串，避免'1月'匹配到'12月'"""
+    if pd.isna(text):
+        return False
+    pattern = rf'(?<!\d){re.escape(month)}(?!\d)'
+    return bool(re.search(pattern, str(text).strip()))
+
+
+def copy_sheet_to_workbook(source_path: str, target_wb, target_name: str) -> None:
+    """跨工作簿复制工作表，保留值、格式、列宽、行高、合并单元格"""
+    from copy import copy as copy_obj
+    source_wb = load_workbook(source_path)
+    source_ws = source_wb.active
+    target_ws = target_wb.create_sheet(target_name)
+
+    for row in source_ws.iter_rows():
+        for cell in row:
+            new_cell = target_ws.cell(row=cell.row, column=cell.column, value=cell.value)
+            if cell.has_style:
+                new_cell.font = copy_obj(cell.font)
+                new_cell.border = copy_obj(cell.border)
+                new_cell.fill = copy_obj(cell.fill)
+                new_cell.number_format = copy_obj(cell.number_format)
+                new_cell.protection = copy_obj(cell.protection)
+                new_cell.alignment = copy_obj(cell.alignment)
+
+    for col_letter, col_dim in source_ws.column_dimensions.items():
+        if col_dim.width:
+            target_ws.column_dimensions[col_letter].width = col_dim.width
+
+    for row_num, row_dim in source_ws.row_dimensions.items():
+        if row_dim.height:
+            target_ws.row_dimensions[row_num].height = row_dim.height
+
+    for merged_range in source_ws.merged_cells.ranges:
+        target_ws.merge_cells(str(merged_range))
+
+    source_wb.close()
 
 
 class SummaryProcessor:
@@ -51,14 +126,11 @@ class SummaryProcessor:
         """
         try:
             self.current_file_path = file_path
-            self.workbook = load_workbook(file_path, data_only=True)
-            self.sheet_names = self.workbook.sheetnames
+            wb = load_workbook(file_path, data_only=True)
+            self.sheet_names = wb.sheetnames
+            wb.close()  # 及时释放资源，后续用pd.read_excel读取数据
             return True, f"成功读取文件：{os.path.basename(file_path)}", self.sheet_names
         except Exception as e:
-            # 关闭工作簿释放资源
-            if hasattr(self, 'workbook') and self.workbook:
-                self.workbook.close()
-                self.workbook = None
             return False, f"读取文件失败：{str(e)}", []
     
     def load_sheet(self, sheet_name: str) -> Tuple[bool, str]:
@@ -149,7 +221,89 @@ class SummaryProcessor:
         # 不符合规则，返回原值
         return company_str
     
-    def process_data(self) -> Tuple[bool, str]:
+    def _extract_payment_type(self, remark2: str) -> Optional[str]:
+        """从备注2值中提取打款类型"""
+        if pd.isna(remark2):
+            return None
+        val_str = str(remark2).strip()
+        
+        if "刘先锋现金卡" in val_str:
+            return "刘先锋现金卡"
+        if val_str.endswith("对公打款"):
+            return "对公打款"
+        if val_str.endswith("代发打款"):
+            return "代发打款"
+        return None
+    
+    def detect_payment_types(self) -> List[str]:
+        """检测备注2列中存在的打款类型"""
+        if self.data_frame is None:
+            return []
+        if "备注2" not in self.data_frame.columns:
+            return []
+        
+        types_found = set()
+        for val in self.data_frame["备注2"].dropna():
+            pt = self._extract_payment_type(val)
+            if pt:
+                types_found.add(pt)
+        
+        # 按固定顺序排序
+        order = {"刘先锋现金卡": 0, "对公打款": 1, "代发打款": 2}
+        return sorted(list(types_found), key=lambda x: order.get(x, 99))
+    
+    def detect_months(self) -> List[str]:
+        """检测备注1列中存在的月份（支持X月和X-Y月格式，如1月、1-2月）"""
+        if self.data_frame is None:
+            return []
+        if "备注1" not in self.data_frame.columns:
+            return []
+        
+        months_found = set()
+        for val in self.data_frame["备注1"].dropna():
+            val_str = str(val).strip()
+            # 精确提取单月份，避免"12月"被拆成"1月"和"2月"
+            found = re.findall(r'(?<!\d)(\d{1,2}月)(?!\d)', val_str)
+            for m in found:
+                try:
+                    num = int(m.replace('月', ''))
+                    if 1 <= num <= 12:
+                        months_found.add(m)
+                except ValueError:
+                    pass
+            
+            # 提取范围月份，如"1-2月"、"3-5月"
+            range_found = re.findall(r'(?<!\d)(\d{1,2}-\d{1,2}月)(?!\d)', val_str)
+            for m in range_found:
+                try:
+                    start, end = m.replace('月', '').split('-')
+                    start_num = int(start)
+                    end_num = int(end)
+                    if 1 <= start_num <= 12 and 1 <= end_num <= 12:
+                        months_found.add(m)
+                except ValueError:
+                    pass
+        
+        # 排序：单月份在前，范围月份在后，均按起始数字排序
+        def sort_key(x):
+            if '-' in x:
+                start = int(x.split('-')[0])
+                return (1, start)
+            return (0, int(x.replace('月', '')))
+        
+        return sorted(list(months_found), key=sort_key)
+    
+    def detect_amount_columns(self) -> List[Tuple[int, str]]:
+        """检测所有名为'打款金额'的列，返回列索引和列字母标识"""
+        if self.data_frame is None:
+            return []
+        
+        amount_cols = [(i, get_column_letter(i + 1)) for i, col in enumerate(self.data_frame.columns) if '打款金额' in str(col)]
+        return amount_cols
+    
+    def process_data(self, selected_types: Optional[List[str]] = None,
+                     selected_months: Optional[List[str]] = None,
+                     selected_amount_col_idx: Optional[int] = None) -> Tuple[bool, str]:
         """
         处理数据：缩写、汇总、生成报表
         
@@ -166,23 +320,46 @@ class SummaryProcessor:
             if "备注2" not in df.columns:
                 return False, "未找到'备注2'列"
             
-            # 检测"打款金额"列（H列）
-            amount_cols = [i for i, col in enumerate(df.columns) if col == '打款金额']
-            
-            if not amount_cols:
-                # 没有列名匹配，尝试使用固定位置（索引7，即第8列）
-                if df.shape[1] > 7:
-                    amount_col_idx = 7
-                else:
-                    return False, "数据列数不足，无法确定'打款金额'列位置"
-            elif len(amount_cols) >= 2:
-                # 有多个"打款金额"列，选择第二个（H列）
-                amount_col_idx = amount_cols[1]
+            # 使用用户选择的打款金额列
+            if selected_amount_col_idx is not None:
+                amount_col_idx = selected_amount_col_idx
             else:
-                amount_col_idx = amount_cols[0]
+                return False, "未选择或检测到'打款金额'列"
             
             # 应用缩写规则
             df['公司缩写'] = df['备注2'].apply(self._abbreviate_company_name)
+            
+            # 根据用户选择的打款类型筛选
+            if selected_types:
+                def match_payment_type(remark2):
+                    if pd.isna(remark2):
+                        return False
+                    val_str = str(remark2).strip()
+                    for pt in selected_types:
+                        if pt == "刘先锋现金卡" and "刘先锋现金卡" in val_str:
+                            return True
+                        if pt == "对公打款" and val_str.endswith("对公打款"):
+                            return True
+                        if pt == "代发打款" and val_str.endswith("代发打款"):
+                            return True
+                    return False
+                
+                df = df[df['备注2'].apply(match_payment_type)]
+                
+                if df.empty:
+                    return False, "没有符合所选打款类型的数据"
+            
+            # 根据用户选择的月份筛选（精确字符串匹配，不展开范围）
+            if selected_months:
+                if "备注1" not in df.columns:
+                    return False, "未找到'备注1'列，无法进行月份筛选"
+                
+                df = df[df['备注1'].apply(
+                    lambda val: any(match_month_in_text(m, val) for m in selected_months)
+                )]
+                
+                if df.empty:
+                    return False, f"没有符合所选月份的数据"
             
             # 获取所有唯一的供应商名称
             if "供应商名称" not in df.columns:
@@ -392,12 +569,13 @@ class SummaryProcessor:
                 return f"供应商汇总_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}"
             return "供应商汇总"
     
-    def save_to_excel(self, save_path: str) -> Tuple[bool, str]:
+    def save_to_excel(self, save_path: str, selected_month: Optional[str] = None) -> Tuple[bool, str]:
         """
         保存到Excel文件
         
         Args:
             save_path: 保存路径
+            selected_month: 用户选择的月份，用于生成工作表标题
             
         Returns:
             (success, message): 是否成功、消息
@@ -409,8 +587,14 @@ class SummaryProcessor:
             # 使用openpyxl创建新工作簿
             wb = openpyxl.Workbook()
             ws = wb.active
-            # 从当前工作表名称提取日期作为工作表标题
-            sheet_title = self._extract_date_from_sheet_name(self.current_sheet)
+            
+            # 生成工作表标题：年份（从工作表名提取）+ 选择的月份
+            if selected_month:
+                year_match = re.search(r'(\d{4}年)', str(self.current_sheet))
+                year = year_match.group(1) if year_match else ""
+                sheet_title = f"{year}{selected_month}" if year else selected_month
+            else:
+                sheet_title = self._extract_date_from_sheet_name(self.current_sheet)
             ws.title = sheet_title
             
             # 写入表头（第1行）
@@ -431,8 +615,8 @@ class SummaryProcessor:
                     else:
                         ws.cell(row=row_idx, column=col_idx, value=value)
             
-            # 设置样式
-            self._apply_excel_styles(ws, self.output_data)
+            # 设置样式（调用公共样式函数）
+            apply_excel_styles(ws, self.output_data)
             
             # 保存
             wb.save(save_path)
@@ -445,406 +629,222 @@ class SummaryProcessor:
     
     def _apply_excel_styles(self, ws: openpyxl.worksheet.worksheet.Worksheet, df: pd.DataFrame) -> None:
         """
-        应用Excel样式
+        应用Excel样式（已提取为公共函数，此处保留向后兼容）
         
         Args:
             ws: 工作表对象
             df: 数据框
         """
-        # 设置标题行样式
-        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
-        header_font = Font(bold=True, color="FFFFFF", size=11)
-        border = Border(
-            left=Side(style='thin'),
-            right=Side(style='thin'),
-            top=Side(style='thin'),
-            bottom=Side(style='thin')
-        )
-        
-        for col in range(1, df.shape[1] + 1):
-            cell = ws.cell(row=1, column=col)
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
-            cell.border = border
-        
-        # 设置数据行样式
-        for row_idx in range(2, df.shape[0] + 2):
-            for col_idx in range(1, df.shape[1] + 1):
-                cell = ws.cell(row=row_idx, column=col_idx)
-                cell.alignment = Alignment(horizontal='center', vertical='center')
-                cell.border = border
-        
-        # 自动调整列宽
-        for col in range(1, df.shape[1] + 1):
-            max_length = 0
-            column_letter = get_column_letter(col)
-            
-            # 检查标题
-            cell = ws.cell(row=1, column=col)
-            if cell.value:
-                max_length = max(max_length, len(str(cell.value)))
-            
-            # 检查数据
-            for row_idx in range(2, df.shape[0] + 2):
-                cell = ws.cell(row=row_idx, column=col)
-                if cell.value:
-                    max_length = max(max_length, len(str(cell.value)))
-            
-            # 设置列宽（最大30，最小10）
-            adjusted_width = min(max_length + 2, 30)
-            ws.column_dimensions[column_letter].width = adjusted_width
+        apply_excel_styles(ws, df)
 
 
-class SummaryProcessorApp:
-    """汇总处理GUI应用程序"""
-    
-    def __init__(self, root: tk.Tk):
-        """
-        初始化应用程序
-        
-        Args:
-            root: Tkinter根窗口
-        """
-        self.root = root
-        self.root.title("Excel汇总处理工具")
-        self.root.geometry("1100x800")
-        self.root.minsize(900, 600)
-        
-        # 配置窗口可调整大小
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        
-        self.processor = SummaryProcessor()
-        self.current_sheet = tk.StringVar()
-        
-        # 配置Treeview样式，减小行高
-        self._setup_treeview_style()
-        
-        self._create_ui()
-    
-    def _setup_treeview_style(self):
-        """配置Treeview样式，优化显示效果"""
-        style = ttk.Style()
-        
-        # 设置Treeview的行高
-        style.configure("Treeview", 
-                       rowheight=25,  # 设置行高
-                       font=('Microsoft YaHei UI', 9))
-        
-        # 设置标题样式
-        style.configure("Treeview.Heading", 
-                       font=('Microsoft YaHei UI', 10, 'bold'))
-        
-        # 设置选中项样式
-        style.map("Treeview",
-                 background=[('selected', '#0078d7')],
-                 foreground=[('selected', 'white')])
-    
-    def _create_ui(self):
-        """创建用户界面"""
-        # 主框架
-        main_frame = ttk.Frame(self.root, padding="15")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # 配置主框架的网格权重
-        main_frame.columnconfigure(0, weight=1)
-        
-        # ========== 文件选择区域 ==========
-        file_frame = ttk.LabelFrame(main_frame, text="文件选择", padding="12")
-        file_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 12))
-        file_frame.columnconfigure(0, weight=1)
-        
-        self.file_path_var = tk.StringVar()
-        file_entry = ttk.Entry(file_frame, textvariable=self.file_path_var, font=('Microsoft YaHei UI', 9))
-        file_entry.grid(row=0, column=0, padx=(0, 10), sticky=(tk.W, tk.E))
-        
-        browse_btn = ttk.Button(file_frame, text="浏览...", command=self._browse_file, width=12)
-        browse_btn.grid(row=0, column=1, padx=(0, 15))
-        
-        ttk.Label(file_frame, text="工作表:", font=('Microsoft YaHei UI', 9)).grid(row=0, column=2, padx=(0, 5))
-        self.sheet_combo = ttk.Combobox(file_frame, textvariable=self.current_sheet, 
-                                       state='readonly', width=25, font=('Microsoft YaHei UI', 9))
-        self.sheet_combo.grid(row=0, column=3)
-        
-        # ========== 操作按钮区域 ==========
-        button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 12))
-        
-        process_btn = ttk.Button(button_frame, text="📊数据处理", command=self._process_data, width=18)
-        process_btn.grid(row=0, column=0, padx=(0, 10))
-        
-        save_btn = ttk.Button(button_frame, text="💾文件保存", command=self._save_file, width=18)
-        save_btn.grid(row=0, column=1, padx=(0, 10))
-        
-        clear_btn = ttk.Button(button_frame, text="🗑️清空", command=self._clear_all, width=18)
-        clear_btn.grid(row=0, column=2)
-        
-        # ========== 数据预览区域 ==========
-        preview_frame = ttk.LabelFrame(main_frame, text="数据预览", padding="12")
-        preview_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 12))
-        preview_frame.columnconfigure(0, weight=1)
-        preview_frame.rowconfigure(0, weight=1)
-        
-        # 创建表格
-        self.tree = ttk.Treeview(preview_frame, selectmode='browse', show='headings')
-        self.tree.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # 滚动条
-        vsb = ttk.Scrollbar(preview_frame, orient="vertical", command=self.tree.yview)
-        vsb.grid(row=0, column=1, sticky=(tk.N, tk.S))
-        hsb = ttk.Scrollbar(preview_frame, orient="horizontal", command=self.tree.xview)
-        hsb.grid(row=1, column=0, sticky=(tk.W, tk.E))
-        
-        # 配置Treeview的滚动命令
-        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
-        
-        # 初始化滚动位置到最左边
-        self.tree.xview_moveto(0)
-        
-        # 绑定鼠标滚轮事件
-        self.tree.bind("<MouseWheel>", self._on_mousewheel)
-        self.tree.bind("<Button-4>", self._on_mousewheel)
-        self.tree.bind("<Button-5>", self._on_mousewheel)
-        
-        # ========== 状态信息栏 ==========
-        status_frame = ttk.LabelFrame(main_frame, text="状态信息", padding="12")
-        status_frame.grid(row=3, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        status_frame.columnconfigure(0, weight=1)
-        status_frame.rowconfigure(0, weight=1)
-        
-        self.status_text = scrolledtext.ScrolledText(status_frame, wrap=tk.WORD, 
-                                                   font=('Consolas', 9))
-        self.status_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # 配置网格权重（让数据预览和状态信息自动调整大小）
-        main_frame.rowconfigure(2, weight=3)  # 数据预览占3份
-        main_frame.rowconfigure(3, weight=1)  # 状态信息占1份
-        
-        # 配置文件选择区域的网格权重
-        file_frame.columnconfigure(0, weight=1)
-        
-        self._log_status("欢迎使用Excel汇总处理工具！")
-        self._log_status("请选择一个Excel文件开始处理。")
-    
-    def _on_mousewheel(self, event):
-        """
-        处理鼠标滚轮事件，支持表格滚动
-        
-        Args:
-            event: 滚轮事件
-        """
-        if event.num == 4 or event.delta > 0:
-            self.tree.yview_scroll(-1, "units")
-        elif event.num == 5 or event.delta < 0:
-            self.tree.yview_scroll(1, "units")
-    
-    def _log_status(self, message: str):
-        """
-        记录状态信息
-        
-        Args:
-            message: 状态消息
-        """
-        timestamp = pd.Timestamp.now().strftime("%H:%M:%S")
-        self.status_text.insert(tk.END, f"[{timestamp}] {message}\n")
-        self.status_text.see(tk.END)
-        self.root.update()
-    
-    def _browse_file(self):
-        """浏览并选择Excel文件"""
-        file_path = filedialog.askopenfilename(
-            title="选择Excel文件",
-            filetypes=[("Excel文件", "*.xlsx *.xls"), ("所有文件", "*.*")]
-        )
-        
-        if file_path:
-            self._log_status(f"正在读取文件：{os.path.basename(file_path)}...")
-            success, message, sheets = self.processor.load_file(file_path)
-            
-            if success:
-                self.file_path_var.set(file_path)
-                self.sheet_combo['values'] = sheets
-                if sheets:
-                    self.sheet_combo.current(0)
-                self._log_status(message)
-                self._log_status(f"包含{len(sheets)}个工作表")
-            else:
-                messagebox.showerror("错误", message)
-                self._log_status(f"错误：{message}")
-    
-    def _process_data(self):
-        """执行数据处理"""
-        file_path = self.file_path_var.get()
-        sheet_name = self.current_sheet.get()
-        
-        if not file_path:
-            messagebox.showwarning("警告", "请先选择Excel文件")
-            return
-        
-        if not sheet_name:
-            messagebox.showwarning("警告", "请选择工作表")
-            return
-        
-        self._log_status("=" * 50)
-        self._log_status("开始数据处理...")
-        
-        # 加载工作表
-        self._log_status(f"1. 加载工作表：{sheet_name}")
-        success, message = self.processor.load_sheet(sheet_name)
-        
-        if not success:
-            messagebox.showerror("错误", message)
-            self._log_status(f"错误：{message}")
-            return
-        
-        self._log_status(message)
-        
-        # 处理数据
-        self._log_status("2. 检测列...")
-        if "备注2" not in self.processor.data_frame.columns:
-            messagebox.showerror("错误", "未找到'备注2'列")
-            self._log_status("错误：未找到'备注2'列")
-            return
-        
-        self._log_status("   ✓ 找到'备注2'列")
-        
-        if "供应商名称" not in self.processor.data_frame.columns:
-            messagebox.showerror("错误", "未找到'供应商名称'列")
-            self._log_status("错误：未找到'供应商名称'列")
-            return
-        
-        self._log_status("   ✓ 找到'供应商名称'列")
-        
-        if "收款姓名" not in self.processor.data_frame.columns:
-            messagebox.showerror("错误", "未找到'收款姓名'列")
-            self._log_status("错误：未找到'收款姓名'列")
-            return
-        
-        self._log_status("   ✓ 找到'收款姓名'列")
-        
-        self._log_status("3. 应用缩写规则...")
-        success, message = self.processor.process_data()
-        
-        if not success:
-            messagebox.showerror("错误", message)
-            self._log_status(f"错误：{message}")
-            return
-        
-        self._log_status(message)
-        
-        # 显示数据预览
-        self._log_status("4. 生成汇总表...")
-        self._show_preview()
-        
-        self._log_status("5. 数据处理完成！")
-        self._log_status("=" * 50)
-        
-        messagebox.showinfo("成功", "数据处理完成！\n可以点击'文件保存'按钮保存结果。")
-    
-    def _show_preview(self):
-        """显示数据预览"""
-        # 清空现有数据
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-        
-        if self.processor.output_data is None:
-            return
-        
-        df = self.processor.output_data
-        
-        # 设置列
-        columns = list(df.columns)
-        self.tree['columns'] = columns
-        
-        # 设置列标题和列宽
-        for col in columns:
-            self.tree.heading(col, text=col)
-            
-            # 根据列名动态设置列宽（优化宽度以减少横向滚动）
-            if col == '供应商名称':
-                self.tree.column(col, width=180, anchor=tk.W)
-            elif col == '公司':
-                self.tree.column(col, width=250, anchor=tk.W)
-            elif col == '总计':
-                self.tree.column(col, width=100, anchor=tk.E)
-            elif col == '':
-                self.tree.column(col, width=30, anchor=tk.CENTER)
-            else:
-                # 公司列
-                self.tree.column(col, width=90, anchor=tk.E)
-        
-        # 显示数据（最多显示50行）
-        display_rows = min(50, len(df))
-        for row in df.head(display_rows).itertuples(index=False):
-            # 处理空值和零值
-            processed_row = tuple(
-                '' if (isinstance(v, (int, float)) and v == 0) 
-                else v if pd.notna(v) 
-                else '' 
-                for v in row
-            )
-            self.tree.insert('', tk.END, values=processed_row)
-        
-        # 强制更新界面
-        self.tree.update_idletasks()
-        
-        # 滚动到最左边
-        self.tree.xview_moveto(0)
-        
-        self._log_status(f"   ✓ 预览显示前{display_rows}行数据")
-        self._log_status(f"   ✓ 共{len(df)}行，{len(columns)}列")
-    
-    def _save_file(self):
-        """保存文件"""
-        if self.processor.output_data is None:
-            messagebox.showwarning("警告", "没有数据可保存，请先进行数据处理")
-            return
-        
-        # 从工作表名称提取日期部分作为文件名
-        sheet_name = self.current_sheet.get()
-        default_name = self.processor._extract_date_from_sheet_name(sheet_name, include_timestamp=True)
-        
-        file_path = filedialog.asksaveasfilename(
-            title="保存文件",
-            defaultextension=".xlsx",
-            filetypes=[("Excel文件", "*.xlsx"), ("所有文件", "*.*")],
-            initialfile=default_name
-        )
-        
-        if file_path:
-            self._log_status("正在保存文件...")
-            success, message = self.processor.save_to_excel(file_path)
-            
-            if success:
-                self._log_status(message)
-                messagebox.showinfo("成功", message)
-            else:
-                messagebox.showerror("错误", message)
-                self._log_status(f"错误：{message}")
-    
-    def _clear_all(self):
-        """清空所有数据"""
-        self.file_path_var.set("")
-        self.current_sheet.set("")
-        self.sheet_combo['values'] = []
-        
-        # 清空预览
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-        
-        # 重置处理器
-        self.processor = SummaryProcessor()
-        
-        self._log_status("已清空所有数据")
+class DataChecker:
+    """数据核对器：对比待核对表与基准表的金额"""
 
+    def __init__(self, reference_path: str):
+        self.reference_path = reference_path
+        self.reference_data: Dict[str, float] = {}  # 供应商名称 -> 总计
 
-def main():
-    """主函数"""
-    root = tk.Tk()
-    app = SummaryProcessorApp(root)
-    root.mainloop()
+    def load_reference(self) -> Tuple[bool, str]:
+        """加载基准表数据（供应商名称 -> 总计），使用向量化操作替代iterrows"""
+        try:
+            df = pd.read_excel(self.reference_path)
+            if '供应商名称' not in df.columns:
+                return False, f"基准表未找到'供应商名称'列"
+            if '总计' not in df.columns:
+                return False, f"基准表未找到'总计'列"
 
+            self.reference_df = df  # 保存原始DataFrame，用于后续提取供应商名称
 
-if __name__ == "__main__":
-    main()
+            # 向量化处理：比iterrows快10-100倍
+            valid_df = df.dropna(subset=['供应商名称']).copy()
+            suppliers = valid_df['供应商名称'].astype(str).str.strip()
+            totals = pd.to_numeric(valid_df['总计'], errors='coerce').fillna(0.0)
+            self.reference_data = dict(zip(suppliers, totals))
+
+            return True, f"加载基准表成功，共{len(self.reference_data)}条数据"
+        except Exception as e:
+            return False, f"加载基准表失败：{str(e)}"
+
+    def detect_columns(self, df: pd.DataFrame) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        """识别月份、介绍人、金额三列，返回(月份列, 介绍人列, 金额列)"""
+        month_col = None
+        person_col = None
+        amount_col = None
+
+        for col in df.columns:
+            col_str = str(col).strip()
+            if month_col is None and '月份' in col_str:
+                month_col = col
+            if person_col is None and '介绍人' in col_str:
+                person_col = col
+            if amount_col is None and '金额' in col_str:
+                amount_col = col
+
+        return month_col, person_col, amount_col
+
+    def get_unique_months(self, df: pd.DataFrame, month_col: str) -> List[str]:
+        """获取月份列的唯一值（支持X月和X-Y月格式）"""
+        if month_col not in df.columns:
+            return []
+        months_found = set()
+        for val in df[month_col].dropna():
+            val_str = str(val).strip()
+            # 单月份
+            found = re.findall(r'(?<!\d)(\d{1,2}月)(?!\d)', val_str)
+            for m in found:
+                try:
+                    num = int(m.replace('月', ''))
+                    if 1 <= num <= 12:
+                        months_found.add(m)
+                except ValueError:
+                    pass
+            # 范围月份
+            range_found = re.findall(r'(?<!\d)(\d{1,2}-\d{1,2}月)(?!\d)', val_str)
+            for m in range_found:
+                try:
+                    start, end = m.replace('月', '').split('-')
+                    if 1 <= int(start) <= 12 and 1 <= int(end) <= 12:
+                        months_found.add(m)
+                except ValueError:
+                    pass
+
+        def sort_key(x):
+            if '-' in x:
+                return (1, int(x.split('-')[0]))
+            return (0, int(x.replace('月', '')))
+        return sorted(list(months_found), key=sort_key)
+
+    def get_unique_persons(self, df: pd.DataFrame, person_col: str) -> List[str]:
+        """获取介绍人列的非空唯一值"""
+        if person_col not in df.columns:
+            return []
+        values = df[person_col].dropna().astype(str).str.strip()
+        values = values[values != '']
+        valid_values = []
+        for v in values.unique():
+            if len(v) > 0 and not v.startswith('#') and v.lower() not in ['nan', 'none', 'null']:
+                valid_values.append(v)
+        return sorted(valid_values)
+
+    def check(self, df: pd.DataFrame, selected_month: str, selected_persons: List[str],
+              month_col: str, person_col: str, amount_col: str) -> Tuple[bool, str, Optional[pd.DataFrame]]:
+        """执行核对：按介绍人分组累加金额，与基准表总计对比"""
+        try:
+            # 筛选月份（使用公共月份匹配函数）
+            df_filtered = df[df[month_col].apply(lambda val: match_month_in_text(selected_month, val))]
+
+            if df_filtered.empty:
+                return False, f"月份'{selected_month}'没有匹配到数据", None
+
+            results = []
+            for person in selected_persons:
+                person_df = df_filtered[df_filtered[person_col].astype(str).str.strip() == person]
+                check_amount = person_df[amount_col].sum()
+
+                base_total = self.reference_data.get(person)
+
+                if base_total is not None:
+                    if abs(float(check_amount) - base_total) < 0.01:
+                        status = "已核对"
+                    else:
+                        status = "待核对"
+                else:
+                    status = "未匹配"
+
+                # 从基准表原始DataFrame中提取对应的供应商名称
+                supplier_name = ''
+                if hasattr(self, 'reference_df') and self.reference_df is not None:
+                    matched = self.reference_df[self.reference_df['供应商名称'].astype(str).str.strip() == person]
+                    if not matched.empty:
+                        supplier_name = str(matched.iloc[0]['供应商名称']).strip()
+
+                results.append({
+                    '介绍人': person,
+                    '待核对金额总计': round(float(check_amount), 2),
+                    '供应商名称': supplier_name,
+                    '对公打款总计': round(base_total, 2) if base_total is not None else '',
+                    '状态': status
+                })
+
+            result_df = pd.DataFrame(results)
+            return True, f"核对完成，共{len(results)}条记录", result_df
+
+        except Exception as e:
+            import traceback
+            return False, f"核对失败：{str(e)}\n{traceback.format_exc()}", None
+
+    @staticmethod
+    def load_check_file(file_path: str, sheet_name: str) -> Tuple[Optional[pd.DataFrame], Optional[str], Optional[str], Optional[str], str]:
+        """使用openpyxl快速加载待核对数据，自动检测表头行，只读取需要的三列"""
+        try:
+            wb = load_workbook(file_path, read_only=True, data_only=True)
+            ws = wb[sheet_name]
+
+            # 自动检测表头行（前5行内查找包含"月份"、"介绍人"、"金额"的行）
+            header_row = None
+            headers = []
+            for row_idx in range(1, min(6, ws.max_row + 1)):
+                row_headers = [str(cell.value).strip() if cell.value else '' for cell in ws[row_idx]]
+                has_month = any('月份' in h for h in row_headers)
+                has_person = any('介绍人' in h for h in row_headers)
+                has_amount = any('金额' in h for h in row_headers)
+                if has_month and has_person and has_amount:
+                    header_row = row_idx
+                    headers = row_headers
+                    break
+
+            if header_row is None:
+                wb.close()
+                return None, None, None, None, "未在表头中找到'月份'、'介绍人'、'金额'列，请确认表头在前5行内"
+
+            # 找到列索引
+            month_col = person_col = amount_col = None
+            month_idx = person_idx = amount_idx = None
+            for i, h in enumerate(headers):
+                if month_col is None and '月份' in h:
+                    month_col = h
+                    month_idx = i
+                if person_col is None and '介绍人' in h:
+                    person_col = h
+                    person_idx = i
+                if amount_col is None and '金额' in h:
+                    amount_col = h
+                    amount_idx = i
+
+            if month_idx is None or person_idx is None or amount_idx is None:
+                wb.close()
+                return None, None, None, None, f"识别列失败，检测到的表头：{headers}"
+
+            # 只读取三列数据
+            data = []
+            for row in ws.iter_rows(min_row=header_row + 1, values_only=True):
+                data.append({
+                    month_col: row[month_idx] if month_idx < len(row) else None,
+                    person_col: row[person_idx] if person_idx < len(row) else None,
+                    amount_col: row[amount_idx] if amount_idx < len(row) else None,
+                })
+
+            df = pd.DataFrame(data)
+            wb.close()
+            return df, month_col, person_col, amount_col, f"共{len(df)}行，表头在第{header_row}行"
+
+        except Exception as e:
+            import traceback
+            return None, None, None, None, f"加载失败：{str(e)}\n{traceback.format_exc()}"
+
+    @staticmethod
+    def save_result(result_df: pd.DataFrame, file_path: str) -> Tuple[bool, str]:
+        """保存核对结果到Excel，应用统一样式"""
+        try:
+            with pd.ExcelWriter(file_path, engine='openpyxl') as writer:
+                result_df.to_excel(writer, sheet_name='核对结果', index=False)
+
+                wb = writer.book
+                ws = writer.sheets['核对结果']
+                apply_excel_styles(ws, result_df)
+
+            return True, f"核对结果已保存到：{file_path}"
+        except Exception as e:
+            import traceback
+            return False, f"保存失败：{str(e)}\n{traceback.format_exc()}"

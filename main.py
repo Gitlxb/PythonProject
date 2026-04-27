@@ -15,7 +15,7 @@ from cw_gys_qzy import run_excel_merger_qzy #财务，供应商，戚倬悦，�
 from cf_zdnrfyq_nrcs_wsx import main_cf_zdnr_ygbg #拆分_指定内容放一起_拆分参数_吴苏霞
 from cw_jxkh_zhf import PerformanceApp # （绩效考核）数据匹配_稳岗率计算_合并表格_张惠芳
 from cw_yzpz_pmh_main import ExcelProcessorGUI # 预支平账_潘墨涵
-from hs_huizong_cxm import SummaryProcessorApp # 核算_汇总_陈小卯
+from hs_huizong_cxm_main import SummaryProcessorApp # 核算_汇总_陈小卯
 
 import tkinter as tk
 from tkinter import messagebox, scrolledtext  # 使用 scrolledtext 支持滚动条
