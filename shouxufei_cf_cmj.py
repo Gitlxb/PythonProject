@@ -70,7 +70,6 @@ def shouxufei_cf_xzy():
 
         # 创建队列用于线程间通信
         progress_queue = queue.Queue()
-
         def update_progress_from_queue():
             """从队列更新进度条"""
             try:
@@ -79,12 +78,12 @@ def shouxufei_cf_xzy():
                         progress, message = progress_queue.get_nowait()
                     except queue.Empty:
                         break
-
+        
                     progress_bar['value'] = progress
                     progress_label.config(text=f"{progress:.0f}%")
                     if message:
                         label.config(text=message)
-
+        
                     if progress >= 100:
                         progress_window.after(1000, show_completion_dialog)
             finally:
@@ -131,8 +130,7 @@ def shouxufei_cf_xzy():
 
                 progress_queue.put((10, "正在处理列映射..."))
                 # 定义列字母到索引的映射
-                col_map = {'A': 0, 'B': 1, 'C': 2, 'D': 3, 'E': 4, 'F': 5, 'G': 6, 'H': 7, 'I': 8, 'J': 9, 'K': 10,
-                           'L': 11}
+                col_map = {'A': 0, 'B': 1, 'C': 2, 'D': 3, 'E': 4, 'F': 5, 'G': 6, 'H': 7, 'I': 8, 'J': 9, 'K': 10, 'L': 11}
                 col_name = {letter: df.columns[idx] for letter, idx in col_map.items()}
 
                 # 对 L 列去除所有空格
@@ -143,7 +141,7 @@ def shouxufei_cf_xzy():
 
                 # 使用向量化操作优化条件判断（性能提升关键）
                 total_rows = len(df)
-
+                
                 # 条件 1: H 列带有"招商银行"且 C 列没有"伟明"，E 列为 0
                 mask1 = df[col_name['H']].astype(str).str.contains('招商银行', na=False) & \
                         ~df[col_name['C']].astype(str).str.contains('伟明', na=False)
@@ -200,7 +198,7 @@ def shouxufei_cf_xzy():
                     ws_calc[f'F{row}'] = f'=D{row}-E{row}'
 
                 wb_calc.save(output_file)
-
+                
                 progress_queue.put((60, "正在拆分工作表..."))
 
                 # 根据 G 列的内容创建新的工作表
@@ -237,7 +235,7 @@ def shouxufei_cf_xzy():
                             df_for_split.at[idx, col_name['F']] = 0
 
                 wb_temp.close()
-
+                                
                 with pd.ExcelWriter(output_file, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
                     unique_values = df_for_split[df_for_split.columns[col_map['G']]].unique()
 
@@ -288,25 +286,28 @@ def shouxufei_cf_xzy():
                         if ws[f'I{row}'].value and '驻厂' in str(ws[f'I{row}'].value):
                             for col in ['D', 'E', 'F', 'G', 'H', 'I']:
                                 ws[f'{col}{row}'].fill = yellow_fill
-
+                        
                         # 招商银行标记
-                        if ws[f'H{row}'].value and '招商银行' in str(ws[f'H{row}'].value):
+                        c_value = ws[f'C{row}'].value
+                        h_value = ws[f'H{row}'].value
+
+                        # 伟明 + 招商银行：不标黄
+                        if c_value and '伟明' in str(c_value) and h_value and '招商银行' in str(h_value):
+                            pass
+                        elif h_value and '招商银行' in str(h_value):
                             for col in ['D', 'E', 'F', 'G', 'H']:
                                 ws[f'{col}{row}'].fill = yellow_fill
 
                         # 伟明 + 中信银行标记
-                        c_value = ws[f'C{row}'].value
-                        h_value = ws[f'H{row}'].value
                         if c_value and '伟明' in str(c_value) and h_value and '中信银行' in str(h_value):
                             for col in ['D', 'E', 'F', 'G', 'H']:
                                 ws[f'{col}{row}'].fill = yellow_fill
-
+                        
                         # 瑞立 + 招商银行/邮政标记
-                        if c_value and '瑞立' in str(c_value) and h_value and (
-                                '招商银行' in str(h_value) or '邮政' in str(h_value)):
+                        if c_value and '瑞立' in str(c_value) and h_value and ('招商银行' in str(h_value) or '邮政' in str(h_value)):
                             for col in ['D', 'E', 'F', 'G', 'H']:
                                 ws[f'{col}{row}'].fill = yellow_fill
-
+                        
                         # 中世标记
                         if c_value and '中世' in str(c_value):
                             for col in ['D', 'E', 'F', 'G', 'H']:
