@@ -835,8 +835,9 @@ class ExcelProcessor:
                                     if abs(salary_advance - sheet4_advance_num) < 0.01:
                                         # 标记该记录已使用
                                         record["used"] = True
-                                        # 批量更新单元格
-                                        salary_sheet.cell(row=data['row'], column=balance_col).value = data['advance']
+                                        # 批量更新单元格（实时读取当前预支数额，确保平账额与预支数额一致）
+                                        real_advance = salary_sheet.cell(row=data['row'], column=advance_col).value
+                                        salary_sheet.cell(row=data['row'], column=balance_col).value = real_advance
                                         if settled_col:
                                             salary_sheet.cell(row=data['row'], column=settled_col).value = today_date
                                         if month_col:
