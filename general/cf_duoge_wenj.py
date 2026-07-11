@@ -7,7 +7,8 @@
 
 import pandas as pd
 import os
-from tkinter import Tk, filedialog, messagebox, simpledialog
+import tkinter as tk
+from tkinter import filedialog, messagebox, simpledialog
 from datetime import datetime
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
@@ -73,57 +74,68 @@ def auto_adjust_column_widths(file_path):
         print(f"调整列宽时出错: {e}")
 
 
-def split_excel_by_column():
-    # 初始化Tkinter
-    root = Tk()
-    root.withdraw()  # 隐藏Tkinter主窗口
+def split_excel_by_column(parent=None):
+    """
+    按列拆分Excel文件
+    :param parent: 父窗口，如果提供则使用Toplevel，否则使用独立的Tk实例
+    """
+    # 初始化Tkinter - 如果有父窗口则创建Toplevel，否则创建临时Tk
+    if parent:
+        # 如果有父窗口，创建一个临时的Toplevel用于文件对话框
+        dialog_parent = tk.Toplevel(parent)
+        dialog_parent.withdraw()
+    else:
+        # 否则创建独立的Tk实例
+        dialog_parent = tk.Tk()
+        dialog_parent.withdraw()  # 隐藏Tkinter主窗口
 
-    # 选择要读取的Excel文件
-    file_path = filedialog.askopenfilename(
-        title="选择要拆分的Excel文件",
-        filetypes=[("Excel files", "*.xlsx *.xls")]
-    )
-    if not file_path:
-        messagebox.showerror("错误", "未选择文件")
-        return
-
-    # 选择保存路径
-    save_dir = filedialog.askdirectory(title="选择保存路径")
-    if not save_dir:
-        messagebox.showerror("错误", "未选择保存路径")
-        return
-
-    # 读取Excel文件
     try:
-        df = pd.read_excel(file_path)
-    except Exception as e:
-        messagebox.showerror("错误", f"读取文件失败: {e}")
-        return
-
-    # 弹出对话框，输入要拆分的列字母（如 A, B, AA, AB）
-    columns_input = simpledialog.askstring(
-        "输入列字母",
-        "请输入要拆分的列（字母，多个列用逗号分隔，例如：A,B,AA）："
-    )
-    if not columns_input:
-        messagebox.showerror("错误", "未输入列字母")
-        return
-
-    # 将输入的字母转换为列索引（0-based）
-    try:
-        columns = [excel_column_to_index(col.strip()) for col in columns_input.split(',') if col.strip()]
-    except ValueError as e:
-        messagebox.showerror("错误", str(e))
-        return
-
-    # 验证列索引是否有效
-    for col_idx in columns:
-        if col_idx < 0 or col_idx >= len(df.columns):
-            messagebox.showerror("错误", f"列 '{columns_input}' 不存在于文件中")
+        # 选择要读取的Excel文件
+        file_path = filedialog.askopenfilename(
+            title="选择要拆分的Excel文件",
+            filetypes=[("Excel files", "*.xlsx *.xls")],
+            parent=dialog_parent if parent else None
+        )
+        if not file_path:
+            messagebox.showerror("错误", "未选择文件")
             return
 
-    # 根据指定的列进行拆分
-    try:
+        # 选择保存路径
+        save_dir = filedialog.askdirectory(title="选择保存路径")
+        if not save_dir:
+            messagebox.showerror("错误", "未选择保存路径")
+            return
+
+        # 读取Excel文件
+        try:
+            df = pd.read_excel(file_path)
+        except Exception as e:
+            messagebox.showerror("错误", f"读取文件失败: {e}")
+            return
+
+        # 弹出对话框，输入要拆分的列字母（如 A, B, AA, AB）
+        columns_input = simpledialog.askstring(
+            "输入列字母",
+            "请输入要拆分的列（字母，多个列用逗号分隔，例如：A,B,AA）："
+        )
+        if not columns_input:
+            messagebox.showerror("错误", "未输入列字母")
+            return
+
+        # 将输入的字母转换为列索引（0-based）
+        try:
+            columns = [excel_column_to_index(col.strip()) for col in columns_input.split(',') if col.strip()]
+        except ValueError as e:
+            messagebox.showerror("错误", str(e))
+            return
+
+        # 验证列索引是否有效
+        for col_idx in columns:
+            if col_idx < 0 or col_idx >= len(df.columns):
+                messagebox.showerror("错误", f"列 '{columns_input}' 不存在于文件中")
+                return
+
+        # 根据指定的列进行拆分
         for col_idx in columns:
             col_name = df.columns[col_idx]  # 获取列名
             unique_values = df[col_name].unique()  # 获取该列的唯一值
@@ -170,8 +182,10 @@ def split_excel_by_column():
     except Exception as e:
         messagebox.showerror("错误", f"处理过程中出现错误: {e}")
     finally:
-        # 确保在任何情况下都会显示完成或错误信息，并给用户时间查看
-        root.quit()
+        # 关闭临时窗口
+        if not parent:
+            dialog_parent.quit()
+            dialog_parent.destroy()
 
 
 # if __name__ == "__main__":

@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['main.py'],
+    ['main_integrated.py'],
     pathex=[],
     binaries=[],
     datas=[],
@@ -22,7 +22,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='Excel工具箱',
+    name='财务工具箱',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

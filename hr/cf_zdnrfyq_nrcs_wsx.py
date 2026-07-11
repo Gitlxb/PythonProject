@@ -41,39 +41,42 @@ def auto_adjust_column_width(worksheet):
         worksheet.column_dimensions[column_letter].width = width
 
 
-def main_cf_zdnr_ygbg():
+def main_cf_zdnr_ygbg(parent=None):
+    """指定内容放一起_拆分参数主函数"""
     # 创建Tkinter根窗口并隐藏
-    root = tk.Tk()
-    root.withdraw()
+    if parent and (isinstance(parent, tk.Tk) or isinstance(parent, tk.Toplevel)):
+        root = tk.Toplevel(parent)
+        root.withdraw()
+    else:
+        root = tk.Tk()
+        root.withdraw()
 
     try:
         # 1. 选择Excel文件
         file_path = filedialog.askopenfilename(
             title="选择要拆分的Excel文件",
-            filetypes=[("Excel files", "*.xlsx *.xls")]
+            filetypes=[("Excel files", "*.xlsx *.xls")],
+            parent=root
         )
         if not file_path:
-            print("未选择文件")
             return
 
         # 获取原文件名（不含扩展名）
         original_filename = os.path.splitext(os.path.basename(file_path))[0]
 
         # 2. 选择存储文件夹
-        save_folder = filedialog.askdirectory(title="选择拆分文件的存储文件夹")
+        save_folder = filedialog.askdirectory(title="选择拆分文件的存储文件夹", parent=root)
         if not save_folder:
-            print("未选择存储文件夹")
             return
 
         # 3. 输入要拆分的列字母（支持AAA格式）
-        column_letter = simpledialog.askstring("输入列字母", "请输入要拆分的列字母（如E, F, AA等）:")
+        column_letter = simpledialog.askstring("输入列字母", "请输入要拆分的列字母（如E, F, AA等）:", parent=root)
         if not column_letter:
-            print("未输入列字母")
             return
 
         # 验证列字母格式
         if not re.match(r'^[A-Za-z]{1,3}$', column_letter):
-            messagebox.showerror("错误", "请输入有效的列字母（1-3个字母）")
+            messagebox.showerror("错误", "请输入有效的列字母（1-3个字母）", parent=root)
             return
 
         # 读取Excel文件
@@ -82,7 +85,7 @@ def main_cf_zdnr_ygbg():
 
         # 检查是否存在"拆分参数"工作表
         if '拆分参数' not in excel_file.sheet_names:
-            messagebox.showerror("错误", "Excel文件中找不到'拆分参数'工作表")
+            messagebox.showerror("错误", "Excel文件中找不到'拆分参数'工作表", parent=root)
             return
 
         # 读取拆分参数工作表
@@ -111,7 +114,7 @@ def main_cf_zdnr_ygbg():
                 break
 
         if not data_sheet_name:
-            messagebox.showerror("错误", "找不到数据工作表")
+            messagebox.showerror("错误", "找不到数据工作表", parent=root)
             return
 
         print(f"正在处理工作表: {data_sheet_name}")
@@ -132,10 +135,10 @@ def main_cf_zdnr_ygbg():
         try:
             column_index = column_letter_to_index(column_letter)
             if column_index >= len(df.columns):
-                messagebox.showerror("错误", f"列{column_letter}不存在于工作表中")
+                messagebox.showerror("错误", f"列{column_letter}不存在于工作表中", parent=root)
                 return
         except Exception as e:
-            messagebox.showerror("错误", f"列字母转换失败: {str(e)}")
+            messagebox.showerror("错误", f"列字母转换失败: {str(e)}", parent=root)
             return
 
         split_column_name = df.columns[column_index]
@@ -211,10 +214,10 @@ def main_cf_zdnr_ygbg():
                             f"文件拆分完成！\n"
                             f"创建了 {len(created_files)} 个分组文件\n"
                             f"处理了 {total_processed} 行数据\n"
-                            f"保存位置: {save_folder}")
+                            f"保存位置: {save_folder}", parent=root)
 
     except Exception as e:
-        messagebox.showerror("错误", f"处理过程中发生错误: {str(e)}")
+        messagebox.showerror("错误", f"处理过程中发生错误: {str(e)}", parent=root)
         print(f"错误详情: {str(e)}")
         import traceback
         traceback.print_exc()

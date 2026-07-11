@@ -15,14 +15,25 @@ from openpyxl import load_workbook
 from openpyxl.styles import numbers
 
 
-def select_excel_file():
-    root = Tk()
-    root.withdraw()
-    file_path = filedialog.askopenfilename(
-        title="选择Excel文件",
-        filetypes=[("Excel文件", "*.xlsx *.xls"), ("所有文件", "*.*")]
-    )
-    root.destroy()
+def select_excel_file(parent=None):
+    """选择Excel文件"""
+    if parent and (isinstance(parent, tk.Tk) or isinstance(parent, tk.Toplevel)):
+        temp = tk.Toplevel(parent)
+        temp.withdraw()
+        file_path = filedialog.askopenfilename(
+            title="选择Excel文件",
+            filetypes=[("Excel文件", "*.xlsx *.xls"), ("所有文件", "*.*")],
+            parent=temp
+        )
+        temp.destroy()
+    else:
+        root = Tk()
+        root.withdraw()
+        file_path = filedialog.askopenfilename(
+            title="选择Excel文件",
+            filetypes=[("Excel文件", "*.xlsx *.xls"), ("所有文件", "*.*")]
+        )
+        root.destroy()
     return file_path
 
 
@@ -31,10 +42,16 @@ def get_system_date():
     return datetime.now().date()
 
 
-def select_date_column(columns):
-    root = tk.Tk()
+def select_date_column(columns, parent=None):
+    """选择日期列"""
+    if parent and (isinstance(parent, tk.Tk) or isinstance(parent, tk.Toplevel)):
+        root = tk.Toplevel(parent)
+    else:
+        root = tk.Tk()
     root.title("选择日期列")
     root.geometry("300x150")
+    root.transient(parent) if parent else None
+    root.grab_set()
 
     tk.Label(root, text="请选择日期列：").pack(pady=10)
 
@@ -50,6 +67,8 @@ def select_date_column(columns):
 
     tk.Button(root, text="确定", command=on_ok).pack(pady=10)
 
+    root.lift()
+    root.focus_force()
     root.mainloop()
     return selected_column[0]
 
@@ -104,10 +123,10 @@ def filter_data(df, date_column, user_date):
         return None, None
 
 
-def main():
+def main(parent=None):
     try:
         # 1. 选择文件
-        excel_path = select_excel_file()
+        excel_path = select_excel_file(parent)
         if not excel_path:
             return
 
@@ -116,10 +135,10 @@ def main():
 
         # 3. 获取系统日期
         user_date = get_system_date()
-        messagebox.showinfo("使用日期", f"将使用当前系统日期: {user_date.strftime('%Y-%m-%d')}")
+        messagebox.showinfo("使用日期", f"将使用当前系统日期: {user_date.strftime('%Y-%m-%d')}", parent=parent)
 
         # 4. 选择日期列
-        date_column = select_date_column(df.columns.tolist())
+        date_column = select_date_column(df.columns.tolist(), parent)
         if not date_column:
             return
 
@@ -166,10 +185,10 @@ def main():
 
         messagebox.showinfo("完成", f"文件已保存至:\n{new_path}\n"
                                   f"符合日期数据: {len(matched_df)}条\n"
-                                  f"不符合日期数据: {len(unmatched_df)}条")
+                                  f"不符合日期数据: {len(unmatched_df)}条", parent=parent)
 
     except Exception as e:
-        messagebox.showerror("错误", f"程序运行出错: {str(e)}")
+        messagebox.showerror("错误", f"程序运行出错: {str(e)}", parent=parent)
 
 
 # if __name__ == "__main__":

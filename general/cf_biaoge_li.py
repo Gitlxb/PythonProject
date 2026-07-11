@@ -7,7 +7,8 @@
 
 import pandas as pd
 import os
-from tkinter import Tk, filedialog, simpledialog, messagebox
+import tkinter as tk
+from tkinter import filedialog, simpledialog, messagebox
 from datetime import datetime, date
 import re
 
@@ -80,25 +81,33 @@ def clean_sheet_name(name):
     return name
 
 
-def split_excel_by_column():
-    # 隐藏Tkinter根窗口
-    root = Tk()
-    root.withdraw()
-
-    # 选择要读取的Excel文件
-    file_path = filedialog.askopenfilename(title="选择要读取的Excel文件", filetypes=[("Excel files", "*.xlsx *.xls")])
-    if not file_path:
-        print("未选择文件，程序退出。")
-        return
-
-    # 选择保存路径
-    save_path = filedialog.asksaveasfilename(title="选择保存路径", defaultextension=".xlsx",
-                                             filetypes=[("Excel files", "*.xlsx")])
-    if not save_path:
-        print("未选择保存路径，程序退出。")
-        return
+def split_excel_by_column(parent=None):
+    """
+    按列拆分Excel文件到不同的工作表
+    :param parent: 父窗口，如果提供则使用其作为对话框的父窗口
+    """
+    # 创建临时窗口用于文件对话框
+    temp_root = tk.Tk()
+    temp_root.withdraw()
 
     try:
+        # 选择要读取的Excel文件
+        file_path = filedialog.askopenfilename(
+            title="选择要读取的Excel文件", 
+            filetypes=[("Excel files", "*.xlsx *.xls")],
+            parent=temp_root if not parent else parent
+        )
+        if not file_path:
+            print("未选择文件，程序退出。")
+            return
+
+        # 选择保存路径
+        save_path = filedialog.asksaveasfilename(title="选择保存路径", defaultextension=".xlsx",
+                                                 filetypes=[("Excel files", "*.xlsx")])
+        if not save_path:
+            print("未选择保存路径，程序退出。")
+            return
+
         # 读取Excel文件，保持原始数据类型
         df = pd.read_excel(file_path)
 
@@ -174,6 +183,13 @@ def split_excel_by_column():
     except Exception as e:
         messagebox.showerror("错误", f"处理过程中出现错误：{str(e)}")
         print(f"错误：{str(e)}")
+    finally:
+        # 清理临时窗口
+        if not parent:
+            temp_root.quit()
+            temp_root.destroy()
+        else:
+            temp_root.destroy()
 
 
 # if __name__ == "__main__":

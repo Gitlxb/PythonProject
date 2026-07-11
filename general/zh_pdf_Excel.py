@@ -19,8 +19,15 @@ from openpyxl.styles import Alignment
 
 
 class PDFToExcelConverter:
-    def __init__(self):
-        self.root = tk.Tk()
+    def __init__(self, parent=None):
+        # 如果提供了父窗口，使用Toplevel；否则创建新的Tk实例
+        if parent:
+            self.root = tk.Toplevel(parent)
+            self.root.transient(parent)  # 设置为父窗口的临时窗口
+            self.root.grab_set()  # 设置为模态窗口
+        else:
+            self.root = tk.Tk()
+        
         self.root.title("PDF转Excel工具 - 对齐列版")
         self.root.geometry("550x350")
 
@@ -36,6 +43,11 @@ class PDFToExcelConverter:
 
         # 创建UI元素
         self.create_widgets()
+        
+        # 如果有父窗口，提升当前窗口到前面
+        if parent:
+            self.root.lift()
+            self.root.focus_force()
 
     def create_widgets(self):
         """创建界面元素"""

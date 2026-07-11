@@ -7,13 +7,28 @@
 
 import os
 import pandas as pd
+import tkinter as tk
 from tkinter import Tk, filedialog, messagebox
 
 
-def select_directory(title):
-    root = Tk()
-    root.withdraw()  # 隐藏主窗口
-    directory = filedialog.askdirectory(title=title)
+def select_directory(title, parent=None):
+    """
+    选择文件夹路径
+    :param title: 对话框标题
+    :param parent: 父窗口，如果提供则使用其作为对话框父窗口
+    """
+    if parent and (isinstance(parent, tk.Tk) or isinstance(parent, tk.Toplevel)):
+        # 如果有父窗口，创建一个临时的Toplevel用于文件对话框
+        temp = tk.Toplevel(parent)
+        temp.withdraw()
+        directory = filedialog.askdirectory(title=title, parent=temp)
+        temp.destroy()
+    else:
+        # 否则使用独立的Tk实例
+        root = Tk()
+        root.withdraw()  # 隐藏主窗口
+        directory = filedialog.askdirectory(title=title)
+        root.destroy()
     return directory
 
 

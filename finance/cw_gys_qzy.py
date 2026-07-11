@@ -5,7 +5,7 @@
 # @File : cw_gys_qzy.py
 # @Software: PyCharm
 
-def run_excel_merger_qzy():
+def run_excel_merger_qzy(parent=None):
     """运行Excel合并工具"""
     try:
         import os
@@ -16,7 +16,12 @@ def run_excel_merger_qzy():
         import threading
 
         # 创建新的Toplevel窗口
-        merger_window = tk.Toplevel()
+        if parent and (isinstance(parent, tk.Tk) or isinstance(parent, tk.Toplevel)):
+            merger_window = tk.Toplevel(parent)
+            merger_window.transient(parent)
+            merger_window.grab_set()
+        else:
+            merger_window = tk.Toplevel()
         merger_window.title("Excel文件合并工具")
         merger_window.geometry("500x350")
 

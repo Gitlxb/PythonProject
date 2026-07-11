@@ -7,6 +7,7 @@
 
 import pandas as pd
 import os
+import tkinter as tk
 from tkinter import Tk, filedialog, messagebox, simpledialog
 from datetime import datetime
 from openpyxl import load_workbook
@@ -106,89 +107,94 @@ def save_dataframe_with_text_format(df, file_path):
     auto_adjust_column_widths(file_path)
 
 
-def split_excel_by_column_zcfgzb():
+def split_excel_by_column_zcfgzb(parent=None):
+    """按列拆分Excel文件（在职离职版）"""
     # 初始化Tkinter
-    root = Tk()
-    root.withdraw()  # 隐藏Tkinter主窗口
+    if parent and (isinstance(parent, tk.Tk) or isinstance(parent, tk.Toplevel)):
+        root = tk.Toplevel(parent)
+        root.withdraw()
+    else:
+        root = Tk()
+        root.withdraw()  # 隐藏Tkinter主窗口
 
-    # 选择要读取的Excel文件
-    file_path = filedialog.askopenfilename(
-        title="选择要拆分的Excel文件",
-        filetypes=[("Excel files", "*.xlsx *.xls")]
-    )
-    if not file_path:
-        messagebox.showerror("错误", "未选择文件")
-        return
-
-    # 选择保存路径
-    save_dir = filedialog.askdirectory(title="选择保存路径")
-    if not save_dir:
-        messagebox.showerror("错误", "未选择保存路径")
-        return
-
-    # 读取Excel文件
     try:
-        # 首先读取列名，确定哪些列可能是日期列
-        header_df = pd.read_excel(file_path, nrows=0)
-        date_parser_cols = []
-
-        # 创建一个转换器字典，将所有列都作为字符串读取
-        converters = {}
-        for col in header_df.columns:
-            converters[col] = str
-
-        # 使用converters参数确保所有列都以字符串形式读取
-        df = pd.read_excel(file_path, converters=converters)
-
-    except Exception as e:
-        messagebox.showerror("错误", f"读取文件失败: {e}")
-        return
-
-    # 格式化日期列（只保留年月日）
-    df = format_date_columns(df)
-
-    # 弹出对话框，输入要拆分的列字母（如 A, B, AA, AB）
-    columns_input = simpledialog.askstring(
-        "输入列字母",
-        "请输入要拆分的列（字母，多个列用逗号分隔，例如：A,B,AA）："
-    )
-    if not columns_input:
-        messagebox.showerror("错误", "未输入列字母")
-        return
-
-    # 将输入的字母转换为列索引（0-based）
-    try:
-        columns = [excel_column_to_index(col.strip()) for col in columns_input.split(',') if col.strip()]
-    except ValueError as e:
-        messagebox.showerror("错误", str(e))
-        return
-
-    # 验证列索引是否有效
-    for col_idx in columns:
-        if col_idx < 0 or col_idx >= len(df.columns):
-            messagebox.showerror("错误", f"列 '{columns_input}' 不存在于文件中")
+        # 选择要读取的Excel文件
+        file_path = filedialog.askopenfilename(
+            title="选择要拆分的Excel文件",
+            filetypes=[("Excel files", "*.xlsx *.xls")],
+            parent=root
+        )
+        if not file_path:
             return
 
-    # 询问是否要对所有拆分后的文件进一步拆分工作表
-    split_all_files = messagebox.askyesno("进一步拆分", "是否要对所有拆分后的文件进一步拆分工作表？")
+        # 选择保存路径
+        save_dir = filedialog.askdirectory(title="选择保存路径", parent=root)
+        if not save_dir:
+            return
 
-    # 如果选择是，则询问要拆分的列
-    split_columns = None
-    if split_all_files:
-        split_columns_input = simpledialog.askstring(
-            "输入工作表拆分列字母",
-            "请输入要拆分工作表的列（字母，多个列用逗号分隔）："
+        # 读取Excel文件
+        try:
+            # 首先读取列名，确定哪些列可能是日期列
+            header_df = pd.read_excel(file_path, nrows=0)
+            date_parser_cols = []
+
+            # 创建一个转换器字典，将所有列都作为字符串读取
+            converters = {}
+            for col in header_df.columns:
+                converters[col] = str
+
+            # 使用converters参数确保所有列都以字符串形式读取
+            df = pd.read_excel(file_path, converters=converters)
+
+        except Exception as e:
+            messagebox.showerror("错误", f"读取文件失败: {e}", parent=root)
+            return
+
+        # 格式化日期列（只保留年月日）
+        df = format_date_columns(df)
+
+        # 弹出对话框，输入要拆分的列字母（如 A, B, AA, AB）
+        columns_input = simpledialog.askstring(
+            "输入列字母",
+            "请输入要拆分的列（字母，多个列用逗号分隔，例如：A,B,AA）：",
+            parent=root
         )
-        if split_columns_input:
-            try:
-                split_columns = [excel_column_to_index(col.strip()) for col in split_columns_input.split(',') if
-                                 col.strip()]
-            except ValueError as e:
-                messagebox.showerror("错误", str(e))
+        if not columns_input:
+            return
+
+        # 将输入的字母转换为列索引（0-based）
+        try:
+            columns = [excel_column_to_index(col.strip()) for col in columns_input.split(',') if col.strip()]
+        except ValueError as e:
+            messagebox.showerror("错误", str(e), parent=root)
+            return
+
+        # 验证列索引是否有效
+        for col_idx in columns:
+            if col_idx < 0 or col_idx >= len(df.columns):
+                messagebox.showerror("错误", f"列 '{columns_input}' 不存在于文件中", parent=root)
                 return
 
-    # 根据指定的列进行拆分
-    try:
+        # 询问是否要对所有拆分后的文件进一步拆分工作表
+        split_all_files = messagebox.askyesno("进一步拆分", "是否要对所有拆分后的文件进一步拆分工作表？", parent=root)
+
+        # 如果选择是，则询问要拆分的列
+        split_columns = None
+        if split_all_files:
+            split_columns_input = simpledialog.askstring(
+                "输入工作表拆分列字母",
+                "请输入要拆分工作表的列（字母，多个列用逗号分隔）：",
+                parent=root
+            )
+            if split_columns_input:
+                try:
+                    split_columns = [excel_column_to_index(col.strip()) for col in split_columns_input.split(',') if
+                                     col.strip()]
+                except ValueError as e:
+                    messagebox.showerror("错误", str(e), parent=root)
+                    return
+
+        # 根据指定的列进行拆分
         created_files = []  # 存储创建的文件路径
 
         for col_idx in columns:
@@ -237,15 +243,17 @@ def split_excel_by_column_zcfgzb():
                 try:
                     split_worksheet_in_file(file_path, split_columns)
                 except Exception as e:
-                    messagebox.showerror("错误", f"拆分文件 '{os.path.basename(file_path)}' 时出错: {e}")
+                    messagebox.showerror("错误", f"拆分文件 '{os.path.basename(file_path)}' 时出错: {e}", parent=root)
 
         # 显示完成提示并等待用户确认
-        messagebox.showinfo("完成", "文件拆分完成并已自动调整列宽！")
+        messagebox.showinfo("完成", "文件拆分完成并已自动调整列宽！", parent=root)
     except Exception as e:
-        messagebox.showerror("错误", f"处理过程中出现错误: {e}")
+        messagebox.showerror("错误", f"处理过程中出现错误: {e}", parent=root)
     finally:
         # 确保在任何情况下都会显示完成或错误信息，并给用户时间查看
-        root.quit()
+        if not parent:
+            root.quit()
+        root.destroy()
 
 
 def split_worksheet_in_file(file_path, columns=None):
