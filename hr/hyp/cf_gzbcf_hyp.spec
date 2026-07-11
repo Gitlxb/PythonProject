@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['main.py'],
+    ['cf_gzbcf_hyp.py'],
     pathex=[],
     binaries=[],
     datas=[],
@@ -22,13 +22,12 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='Python脚本',
+    exclude_binaries=False,
+    name='工资表拆分',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,

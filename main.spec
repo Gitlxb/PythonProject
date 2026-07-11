@@ -3,10 +3,13 @@
 
 a = Analysis(
     ['main.py'],
-    pathex=[],
+    pathex=['D:\\application\\PythonProject'],
     binaries=[],
     datas=[],
-    hiddenimports=[],
+    hiddenimports=[
+        'docx', 'lxml', 'PIL',
+        'frame_general', 'frame_finance', 'frame_hr',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -22,7 +25,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='main',
+    name='浙江锦途 - Excel表格处理工具',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

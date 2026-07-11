@@ -1,463 +1,326 @@
-# -- coding: utf-8 --
-# @Time : 2025-09-22 14:19
-# @Author : 贝特利
-# @Email : 1356087739@qq.com
-# @File : main.py
-# @Software: PyCharm
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 
-from cf_duoge_wenj import split_excel_by_column as split_to_files #拆分_拆分成多个表格文件
-from cw_kgz_sx import select_excel_file #财务_开关账_收支记账_筛选
-from cf_biaoge_li import split_excel_by_column #拆分_拆分在表格里
-from Ncengjiwenjj_fzzt import main_zfzwj #N层级文件夹_复制粘贴_只要获取文件
-from cf_duoge_wenj_zz import split_excel_by_column_zcfgzb #拆分_拆分两次_在职离职_吴苏霞
-from shouxufei_cf import shouxufei_cf_xzy #许子怡的
-from cw_gys_qzy import run_excel_merger_qzy #财务，供应商，戚倬悦，就合并Excel
-from cf_zdnrfyq_nrcs_wsx import main_cf_zdnr_ygbg #拆分_指定内容放一起_拆分参数_吴苏霞
-from cw_jxkh_zhf import PerformanceApp # （绩效考核）数据匹配_稳岗率计算_合并表格_张惠芳
-from cw_yzpz_pmh_main import ExcelProcessorGUI # 预支平账_潘墨涵
-from hs_huizong_cxm_main import SummaryProcessorApp # 核算_汇总_陈小卯
+"""
+浙江锦途 - 处理Excel的Python脚本
+使用CustomTkinter实现的现代化GUI
+左侧导航栏 + Frame切换 方案
+整合：通用功能、财务功能、人事功能
+"""
 
+import customtkinter as ctk
 import tkinter as tk
-from tkinter import messagebox, scrolledtext  # 使用 scrolledtext 支持滚动条
+from frame_general import GeneralFrame
+from frame_finance import FinanceFrame
+from frame_hr import HRFrame
+
+# 设置CustomTkinter外观
+ctk.set_appearance_mode("light")  # 可选: "light", "dark", "system"
+ctk.set_default_color_theme("blue")  # 可选: "blue", "green", "dark-blue"
 
 
-class MainToolApp:
+class MainApp:
+    """浙江锦途主界面 - 左侧导航+Frame切换"""
+
     def __init__(self, root):
         self.root = root
         self.root.title("浙江锦途 - 处理Excel的Python脚本")
-        self.root.geometry("900x800")  # 增加高度以容纳更多内容
-        self.root.resizable(False, False)
-        self.root.configure(bg="#F5F5F5")##f0f0f0 #F5F5F5
+        self.root.geometry("1100x750")
+        self.root.minsize(950, 650)
+
+        # 当前激活的Frame
+        self.current_frame = None
+        self.frame_instances = {}
+
+        # 导航按钮引用
+        self.nav_buttons = {}
 
         # 创建界面
-        self.create_widgets()
+        self._create_ui()
 
-        # 标记功能按钮是否已显示
-        self.function_buttons_visible = False
+    def _create_ui(self):
+        """创建界面布局"""
+        # 主水平容器
+        main_container = ctk.CTkFrame(self.root, fg_color="transparent")
+        main_container.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
 
-    def create_widgets(self):
-        """创建所有UI控件"""
-        # 主框架，用于左右布局
-        main_frame = tk.Frame(self.root, bg="white")##f0f0f0
-        main_frame.pack(pady=20, padx=20, fill="both", expand=False)
+        # ===== 左侧导航栏（深色背景）=====
+        nav_frame = ctk.CTkFrame(main_container, width=240, fg_color="#2c3e50", corner_radius=0)
+        nav_frame.pack(side="left", fill="y")
+        nav_frame.pack_propagate(False)
 
-        # 左侧：公告栏文本框（宽度20字符，高度8行）
-        announce_frame = tk.LabelFrame(main_frame, text="📢 公告栏", font=("微软雅黑", 20, "bold"), bg="white", bd=2)
-        announce_frame.grid(row=0, column=0, rowspan=2, padx=(0, 20), sticky="n")
-
-        self.announce_text = scrolledtext.ScrolledText(
-            announce_frame,
-            width=30,
-            height=12,
-            font=("微软雅黑", 12),
-            bg="white",
-            fg="black",
-            wrap="word"
+        # 导航标题
+        title_label = ctk.CTkLabel(
+            nav_frame,
+            text="🔧 功能菜单",
+            font=("Microsoft YaHei", 20, "bold"),
+            text_color="white",
+            pady=20
         )
-        self.announce_text.pack(padx=5, pady=5)
-        self.announce_text.insert("1.0", "需要添加需求,\n请在企业微信上搜索：\n王智利\n进行反馈。")
-        self.announce_text.config(state="disabled")  # 禁止编辑
+        title_label.pack(pady=(20, 10))
 
-        # 右侧：标题
-        title_frame = tk.Frame(main_frame, bg="white")
-        title_frame.grid(row=0, column=1, sticky="w")
+        # 分隔线
+        separator = ctk.CTkFrame(nav_frame, height=2, fg_color="#34495e")
+        separator.pack(fill="x", padx=15, pady=(0, 15))
 
-        tk.Label(
-            title_frame,
-            text="        浙江锦途专用\n处理Excel的Python脚本",
-            font=("微软雅黑", 18, "bold"),
-            fg="darkblue",
-            bg="white",
+        # ===== 分类：通用功能 =====
+        category_label = ctk.CTkLabel(
+            nav_frame,
+            text="— 通用功能 —",
+            font=("Microsoft YaHei", 12),
+            text_color="#7f8c8d"
+        )
+        category_label.pack(padx=15, pady=(10, 5), anchor="w")
+
+        general_items = [
+            {"key": "general", "text": "📂 通用工具", "desc": "Excel拆分 & 文件获取"},
+        ]
+        for item in general_items:
+            btn = ctk.CTkButton(
+                nav_frame,
+                text=item["text"],
+                command=lambda k=item["key"]: self._switch_frame(k),
+                font=("Microsoft YaHei", 14),
+                fg_color="#34495e",
+                hover_color="#27ae60",
+                text_color="white",
+                corner_radius=8,
+                height=45,
+                anchor="w"
+            )
+            btn.pack(pady=5, padx=15, fill="x")
+            self.nav_buttons[item["key"]] = btn
+
+            desc_label = ctk.CTkLabel(
+                nav_frame,
+                text=item["desc"],
+                font=("Microsoft YaHei", 11),
+                text_color="#7f8c8d"
+            )
+            desc_label.pack(padx=(25, 0), pady=(0, 8), anchor="w")
+
+        # ===== 分类：财务功能 =====
+        category_label2 = ctk.CTkLabel(
+            nav_frame,
+            text="— 财务功能 —",
+            font=("Microsoft YaHei", 12),
+            text_color="#7f8c8d"
+        )
+        category_label2.pack(padx=15, pady=(20, 5), anchor="w")
+
+        finance_items = [
+            {"key": "finance", "text": "💰 财务工具", "desc": "记账/合并/手续费/考核等"},
+        ]
+        for item in finance_items:
+            btn = ctk.CTkButton(
+                nav_frame,
+                text=item["text"],
+                command=lambda k=item["key"]: self._switch_frame(k),
+                font=("Microsoft YaHei", 14),
+                fg_color="#34495e",
+                hover_color="#2980b9",
+                text_color="white",
+                corner_radius=8,
+                height=45,
+                anchor="w"
+            )
+            btn.pack(pady=5, padx=15, fill="x")
+            self.nav_buttons[item["key"]] = btn
+
+            desc_label2 = ctk.CTkLabel(
+                nav_frame,
+                text=item["desc"],
+                font=("Microsoft YaHei", 11),
+                text_color="#7f8c8d"
+            )
+            desc_label2.pack(padx=(25, 0), pady=(0, 8), anchor="w")
+
+        # ===== 分类：人事功能 =====
+        category_label3 = ctk.CTkLabel(
+            nav_frame,
+            text="— 人事功能 —",
+            font=("Microsoft YaHei", 12),
+            text_color="#7f8c8d"
+        )
+        category_label3.pack(padx=15, pady=(20, 5), anchor="w")
+
+        hr_items = [
+            {"key": "hr", "text": "👥 人事工具", "desc": "在职离职拆分/工资表匹配/Word合并"},
+        ]
+        for item in hr_items:
+            btn = ctk.CTkButton(
+                nav_frame,
+                text=item["text"],
+                command=lambda k=item["key"]: self._switch_frame(k),
+                font=("Microsoft YaHei", 14),
+                fg_color="#34495e",
+                hover_color="#e67e22",
+                text_color="white",
+                corner_radius=8,
+                height=45,
+                anchor="w"
+            )
+            btn.pack(pady=5, padx=15, fill="x")
+            self.nav_buttons[item["key"]] = btn
+
+            desc_label3 = ctk.CTkLabel(
+                nav_frame,
+                text=item["desc"],
+                font=("Microsoft YaHei", 11),
+                text_color="#7f8c8d"
+            )
+            desc_label3.pack(padx=(25, 0), pady=(0, 8), anchor="w")
+
+        # 底部公告区域
+        separator2 = ctk.CTkFrame(nav_frame, height=2, fg_color="#34495e")
+        separator2.pack(fill="x", padx=15, pady=(30, 15), side="bottom")
+
+        bottom_frame = ctk.CTkFrame(nav_frame, fg_color="transparent")
+        bottom_frame.pack(side="bottom", fill="x", pady=15, padx=15)
+
+        info_label = ctk.CTkLabel(
+            bottom_frame,
+            text="📢 需要添加需求\n   请在企业微信搜索: 龙喜兵",
+            font=("Microsoft YaHei", 11),
+            text_color="#7f8c8d",
             justify="left"
-        ).pack(anchor="w")
-
-        # 主入口按钮区域
-        self.main_button_frame = tk.Frame(self.root, bg="#F5F5F5")
-        self.main_button_frame.pack(pady=10)
-
-        # 主入口按钮 - 通用功能
-        self.general_button = tk.Button(
-            self.main_button_frame,
-            text="通用功能",
-            font=("微软雅黑", 14, "bold"),
-            width=15,
-            bg="lightblue",
-            fg="black",
-            relief="raised",
-            bd=3,
-            command=self.show_general_functions
         )
-        self.general_button.grid(row=0, column=0, padx=10, pady=10)
+        info_label.pack(anchor="w")
 
-        # 主入口按钮 - 财务功能
-        self.finance_button = tk.Button(
-            self.main_button_frame,
-            text="财务功能",
-            font=("微软雅黑", 14, "bold"),
-            width=15,
-            bg="lightblue",#lightgreen
-            fg="black",
-            relief="raised",
-            bd=3,
-            command=self.show_finance_functions
+        version_label = ctk.CTkLabel(
+            bottom_frame,
+            text="\nv4.0 CustomTkinter版",
+            font=("Microsoft YaHei", 12),
+            text_color="#555555"
         )
-        self.finance_button.grid(row=0, column=1, padx=10, pady=10)
+        version_label.pack(anchor="w")
 
-        # 主入口按钮 - 人事功能
-        self.rs_zygn = tk.Button(
-            self.main_button_frame,
-            text="人事功能",
-            font=("微软雅黑", 14, "bold"),
-            width=15,
-            bg="lightblue",#lightgreen
-            fg="black",
-            relief="raised",
-            bd=3,
-            command=self.rs_zygn_dan
-        )
-        self.rs_zygn.grid(row=0, column=2, padx=10, pady=10)
+        # ===== 右侧内容区（白色背景 + 可滚动）=====
+        content_outer = ctk.CTkFrame(main_container, fg_color="white", corner_radius=0)
+        content_outer.pack(side="right", fill="both", expand=True)
 
-        # 功能按钮区域框架
-        self.function_frame = tk.Frame(self.root, bg="#f0f0f0")
-        self.function_frame.pack(pady=10)
+        # 垂直滚动条
+        self.content_scrollbar = ctk.CTkScrollbar(content_outer, orientation="vertical")
+        self.content_scrollbar.pack(side="right", fill="y")
 
-        # 创建功能按钮但不显示
-        self.create_function_buttons()
-
-        # 退出按钮
-        self.quit_button = tk.Button(
-            self.root,
-            text="退出",
-            font=("微软雅黑", 10),
-            width=10,
-            bg="#f8f9fa",
-            fg="red",
-            command=self.root.quit
-        )
-        self.quit_button.pack(pady=20)
-
-    def create_function_buttons(self):
-        """创建功能按钮但不显示"""
-        # 通用功能框架
-        self.general_frame = tk.LabelFrame(self.function_frame, text="通用功能", font=("微软雅黑", 12, "bold"), bg="#f0f0f0",
-                                           bd=2)
-
-        # 创建内部框架用于多列布局
-        inner_frame = tk.Frame(self.general_frame, bg="#f0f0f0")
-        inner_frame.pack(padx=10, pady=10)
-
-        # 第一列
-        col1_frame = tk.Frame(inner_frame, bg="#f0f0f0")
-        col1_frame.grid(row=0, column=0, padx=10, pady=5)
-
-
-        # 按钮1 - 拆分_拆成多个Excel文件
-        self.btn1 = tk.Button(
-            col1_frame,
-            text="1、拆分_拆成多个Excel文件",
-            font=("微软雅黑", 13),
-            width=25,
+        # 画布作为可滚动容器
+        self.canvas = tk.Canvas(
+            content_outer,
             bg="white",
-            fg="black",
-            relief="groove",
-            bd=2,
-            anchor="w",
-            command=self.run_split_to_files
+            yscrollcommand=self.content_scrollbar.set,
+            highlightthickness=0
         )
-        self.btn1.pack(pady=10)
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.content_scrollbar.configure(command=self.canvas.yview)
 
-        # 按钮3 - N层级文件夹_复制粘贴_只要获取文件
-        self.btn4 = tk.Button(
-            col1_frame,
-            text="2、N层级文件夹中_只获取文件",
-            font=("微软雅黑", 12),
-            width=25,
-            bg="white",
-            fg="black",
-            relief="groove",
-            bd=2,
-            anchor="w",
-            command=self.run_split_to_zhqwj
+        # 内容frame（放入canvas中）
+        self.content_frame = tk.Frame(self.canvas, bg="white")
+        self.canvas_window = self.canvas.create_window(
+            (0, 0), window=self.content_frame, anchor="nw"
         )
-        self.btn4.pack(pady=10)
 
-        # 第二列
-        col2_frame = tk.Frame(inner_frame, bg="#f0f0f0")
-        col2_frame.grid(row=1, column=0, padx=10, pady=5)
+        # 绑定鼠标滚轮事件（支持Windows）
+        def _on_mousewheel(event):
+            self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
-        # 按钮2 - 拆分_按列拆为多个工作表
-        self.btn3 = tk.Button(
-            col2_frame,
-            text="3、拆分_拆成多个工作表",
-            font=("微软雅黑", 12),
-            width=25,
-            bg="white",
-            fg="black",
-            relief="groove",
-            bd=2,
-            anchor="w",
-            command=self.run_split_to_sheets
+        def _bind_mousewheel(event):
+            self.canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        def _unbind_mousewheel(event):
+            self.canvas.unbind_all("<MouseWheel>")
+
+        self.canvas.bind("<Enter>", _bind_mousewheel)
+        self.canvas.bind("<Leave>", _unbind_mousewheel)
+
+        # 当内容高度变化时更新滚动区域
+        self.content_frame.bind("<Configure>", self._on_content_configure)
+
+        # 当Canvas宽度变化时，同步调整内部frame宽度（自适应布局）
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
+
+        # ===== 底部状态栏 =====
+        status_bar = ctk.CTkFrame(self.root, height=32, fg_color="#ecf0f1", corner_radius=0)
+        status_bar.pack(side="bottom", fill="x")
+        status_bar.pack_propagate(False)
+
+        self.status_var = tk.StringVar(value="就绪 - 请选择左侧功能菜单")
+        status_label = ctk.CTkLabel(
+            status_bar,
+            textvariable=self.status_var,
+            font=("Microsoft YaHei", 10),
+            text_color="#7f8c8d",
+            anchor="w"
         )
-        self.btn3.pack(pady=10)
+        status_label.pack(fill="x", padx=20)
+
+        # 默认显示第一个功能
+        self._switch_frame("general")
+
+    def _switch_frame(self, frame_key: str):
+        """切换到指定的功能Frame"""
+        # 更新导航按钮样式
+        color_map = {
+            "general": "#27ae60",
+            "finance": "#2980b9",
+            "hr": "#e67e22",
+        }
+        highlight_color = color_map.get(frame_key, "#3498db")
+
+        for key, btn in self.nav_buttons.items():
+            if key == frame_key:
+                btn.configure(fg_color=highlight_color)
+            else:
+                btn.configure(fg_color="#34495e")
+
+        # 隐藏当前Frame
+        if self.current_frame is not None:
+            self.current_frame.pack_forget()
+
+        # 获取或创建目标Frame实例
+        if frame_key not in self.frame_instances:
+            self.frame_instances[frame_key] = self._create_frame(frame_key)
+
+        target_frame = self.frame_instances[frame_key]
+
+        # 显示新Frame
+        target_frame.pack(fill=tk.BOTH, expand=True)
+        self.current_frame = target_frame
+
+        # 更新状态栏
+        status_texts = {
+            "general": "通用工具 - Excel文件拆分与文件获取",
+            "finance": "财务工具 - 收支记账、合并表格、绩效考核等",
+            "hr": "人事工具 - 在职离职拆分、参数拆分",
+        }
+        self.status_var.set(status_texts.get(frame_key, ""))
+
+    def _create_frame(self, frame_key: str) -> tk.Frame:
+        """根据key创建对应的Frame实例"""
+        if frame_key == "general":
+            return GeneralFrame(self.content_frame, self.status_var)
+        elif frame_key == "finance":
+            return FinanceFrame(self.content_frame, self.status_var)
+        elif frame_key == "hr":
+            return HRFrame(self.content_frame, self.status_var)
+        else:
+            raise ValueError(f"未知的Frame类型: {frame_key}")
+
+    def _on_content_configure(self, event):
+        """内容区域高度变化时更新Canvas滚动区域"""
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def _on_canvas_configure(self, event):
+        """Canvas宽度变化时，同步拉伸内部content_frame宽度"""
+        self.canvas.itemconfig(self.canvas_window, width=event.width)
 
 
+def main():
+    """主函数"""
+    root = ctk.CTk()
+    app = MainApp(root)
 
-        # 财务功能框架
-        self.finance_frame = tk.LabelFrame(self.function_frame, text="财务功能", font=("微软雅黑", 12, "bold"), bg="#f0f0f0",
-                                           bd=2)
-
-        # 创建内部框架用于多列布局
-        inner_frame_cwzy = tk.Frame(self.finance_frame, bg="#f0f0f0")
-        inner_frame_cwzy.pack(padx=10, pady=10)
-
-        # 第一列
-        col1_frame_cwzy = tk.Frame(inner_frame_cwzy, bg="#f0f0f0")
-        col1_frame_cwzy.grid(row=0, column=0, padx=10, pady=5)
-
-        # 按钮1 - 财务_收支记账_筛选_开关账
-        self.btn_cw_1 = tk.Button(
-            col1_frame_cwzy,
-            text="1、财务_收支记账_筛选",
-            font=("微软雅黑", 12),
-            width=25,
-            bg="white",
-            fg="black",
-            relief="groove",
-            bd=2,
-            anchor="w",
-            command=self.run_financial
-        )
-        self.btn_cw_1.pack(pady=10)
-
-        # 按钮2 - 供应商_合并表格
-        self.btn_cw_2 = tk.Button(
-            col1_frame_cwzy,
-            text="2、供应商_合并表格",
-            font=("微软雅黑", 12),
-            width=25,
-            bg="white",
-            fg="black",
-            relief="groove",
-            bd=2,
-            anchor="w",
-            command=self.cwzy_gys_hbbg
-        )
-        self.btn_cw_2.pack(pady=10)
-
-        # 按钮3 - 出纳_手续费
-        self.btn_cw_3 = tk.Button(
-            col1_frame_cwzy,
-            text="3、出纳_手续费",
-            font=("微软雅黑", 12),
-            width=25,
-            bg="white",
-            fg="black",
-            relief="groove",
-            bd=2,
-            anchor="w",
-            command=self.run_financial_shouxufei_cf_xzy
-        )
-        self.btn_cw_3.pack(pady=10)
-
-        # 第二列
-        col2_frame_cwzy = tk.Frame(inner_frame_cwzy, bg="#f0f0f0")
-        col2_frame_cwzy.grid(row=0, column=1, padx=10, pady=5)
-
-        # 按钮4 - 绩效考核
-        self.btn_cw_4 = tk.Button(
-            col2_frame_cwzy,
-            text="4、绩效考核",
-            font=("微软雅黑", 12),
-            width=25,
-            bg="white",
-            fg="black",
-            relief="groove",
-            bd=2,
-            anchor="w",
-            command=self.open_cw_jxkh
-        )
-        self.btn_cw_4.pack(pady=10)
-
-        # 按钮5 - 预支平账
-        self.btn_cw_5 = tk.Button(
-            col2_frame_cwzy,
-            text="5、预支平账",
-            font=("微软雅黑", 12),
-            width=25,
-            bg="white",
-            fg="black",
-            relief="groove",
-            bd=2,
-            anchor="w",
-            command=self.open_cw_yzpz
-        )
-        self.btn_cw_5.pack(pady=10)
-
-        # 按钮6 - 核算
-        self.btn_cw_6 = tk.Button(
-            col2_frame_cwzy,
-            text="6、核算",
-            font=("微软雅黑", 12),
-            width=25,
-            bg="white",
-            fg="black",
-            relief="groove",
-            bd=2,
-            anchor="w",
-            command=self.open_hs_hz
-        )
-        self.btn_cw_6.pack(pady=10)
-
-        # 人事功能框架
-        self.rs_zygn_dkj = tk.LabelFrame(self.function_frame, text="人事功能", font=("微软雅黑", 12, "bold"), bg="#f0f0f0",
-                                           bd=2)
-
-        # 创建内部框架用于多列布局
-        inner_frame_cwzy = tk.Frame(self.general_frame, bg="#f0f0f0")
-        inner_frame_cwzy.pack(padx=10, pady=10)
-
-        # 第一列
-        col1_frame_rszy = tk.Frame(self.rs_zygn_dkj, bg="#f0f0f0")
-        col1_frame_rszy.grid(row=0, column=0, padx=10, pady=5)
-
-        # 按钮1 - 拆分_拆分成多个表格文件_在职离职_吴苏霞
-        self.btn_rs_1 = tk.Button(
-            col1_frame_rszy,
-            text="1、拆分_拆分两次_在职离职",
-            font=("微软雅黑", 12),
-            width=25,
-            bg="white",
-            fg="black",
-            relief="groove",
-            bd=2,
-            anchor="w",
-            command=self.rszy_cf_lc
-        )
-        self.btn_rs_1.pack(pady=10)
-
-        # 按钮2 - 拆分_指定内容放一起_拆分参数_吴苏霞
-        self.btn_rs_2 = tk.Button(
-            col1_frame_rszy,
-            text="2、拆分_指定内容放一起_拆分参数",
-            font=("微软雅黑", 12),
-            width=25,
-            bg="white",
-            fg="black",
-            relief="groove",
-            bd=2,
-            anchor="w",
-            command=self.rszy_cf_cfcs_wsx
-        )
-        self.btn_rs_2.pack(pady=10)
-
-
-    def show_general_functions(self):
-        """显示通用功能"""
-        # 隐藏所有功能框架
-        self.hide_all_functions()
-        # 显示通用功能框架
-        self.general_frame.grid(row=0, column=0, padx=20, pady=10)
-        self.function_buttons_visible = True
-
-    def show_finance_functions(self):
-        """显示财务功能"""
-        # 隐藏所有功能框架
-        self.hide_all_functions()
-        # 显示财务功能框架
-        self.finance_frame.grid(row=0, column=0, padx=20, pady=10)
-        self.function_buttons_visible = True
-
-    def rs_zygn_dan(self):
-        """显示人事功能"""
-        # 隐藏所有功能框架
-        self.hide_all_functions()
-        # 显示人事功能框架
-        self.rs_zygn_dkj.grid(row=0, column=0, padx=20, pady=10)
-        self.function_buttons_visible = True
-
-    def hide_all_functions(self):
-        """隐藏所有功能框架"""
-        self.general_frame.grid_forget()
-        self.finance_frame.grid_forget()
-        self.rs_zygn_dkj.grid_forget()
-        self.function_buttons_visible = False
-
-    def run_split_to_files(self):
-        try:
-            split_to_files()
-        except Exception as e:
-            messagebox.showerror("错误", f"拆分为多个文件时出错: {str(e)}")
-
-    def run_financial(self):
-        try:
-            select_excel_file()
-        except Exception as e:
-            messagebox.showerror("错误", f"财务功能出错: {str(e)}")
-
-    def run_split_to_sheets(self):
-        try:
-            split_excel_by_column()
-        except Exception as e:
-            messagebox.showerror("错误", f"拆分为多个工作表时出错: {str(e)}")
-
-    def run_split_to_zhqwj(self):
-        try:
-            main_zfzwj()
-        except Exception as e:
-            messagebox.showerror("错误", f"代码里的函数不对: {str(e)}")
-
-    def rszy_cf_lc(self):
-        try:
-            split_excel_by_column_zcfgzb()
-        except Exception as e:
-            messagebox.showerror("错误", f"代码里的函数不对: {str(e)}")
-
-    def run_financial_shouxufei_cf_xzy(self):
-        try:
-            shouxufei_cf_xzy()
-        except Exception as e:
-            messagebox.showerror("错误", f"代码里的函数不对: {str(e)}")
-
-    def cwzy_gys_hbbg(self):
-        try:
-            run_excel_merger_qzy()
-        except Exception as e:
-            messagebox.showerror("错误", f"代码里的函数不对: {str(e)}")
-
-    def rszy_cf_cfcs_wsx(self):
-        try:
-            main_cf_zdnr_ygbg()
-        except Exception as e:
-            messagebox.showerror("错误", f"代码里的函数不对: {str(e)}")
-
-    def open_cw_jxkh(self):
-        """打开绩效考核处理工具"""
-        try:
-            window = tk.Toplevel(self.root)
-            window.title("绩效考核处理工具")
-            window.geometry("700x700")
-            app = PerformanceApp(window)
-        except Exception as e:
-            messagebox.showerror("错误", f"打开绩效考核工具失败: {str(e)}")
-
-    def open_cw_yzpz(self):
-        """打开预支平账处理工具"""
-        try:
-            window = tk.Toplevel(self.root)
-            app = ExcelProcessorGUI(window)
-        except Exception as e:
-            messagebox.showerror("错误", f"打开预支平账工具失败: {str(e)}")
-
-    def open_hs_hz(self):
-        """打开核算汇总处理工具"""
-        try:
-            window = tk.Toplevel(self.root)
-            app = SummaryProcessorApp(window)
-        except Exception as e:
-            messagebox.showerror("错误", f"打开核算工具失败: {str(e)}")
-
-# —— 程序启动 ——
-if __name__ == "__main__":
-    root = tk.Tk()
-    app = MainToolApp(root)
     root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
