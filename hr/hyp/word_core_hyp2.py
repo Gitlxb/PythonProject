@@ -186,6 +186,16 @@ def _detect_parent_col(row, keyword_col_index, keyword_is_subjective=False):
         if re.match(r'^\s*\d+\s*(分)?\s*$', cell_text):
             continue
 
+        # 新增：排除 "X.Y" 序号模式（如 "1.4"、"2.5.3"）——
+        # 这些是文档章节编号而非类别名，应跳过
+        if re.match(r'^\s*\d+[.\uFF0E]\d+(?:[.\uFF0E]\d+)*\s*$', cell_text):
+            continue
+
+        # 新增：排除纯序号格式（如 "1、"、"1."）——
+        # 仅由一个数字加标点构成，不含实际语义
+        if re.match(r'^\s*\d+[、.\uFF0E]\s*$', cell_text):
+            continue
+
         # 类别名特征：短文本（2-20字）
         if 2 <= len(cell_text) <= 20:
             candidates.append((ci, len(cell_text)))
@@ -264,6 +274,9 @@ def _extract_score_categories(doc, log_callback=None):
 
                     keyword = match.group(1).strip()
                     keyword = re.sub(r'[；;、，,。\.]+$', '', keyword)
+                    # 去掉尾部括号说明：如 "管理服务组织机构设置（附组织机构图）"
+                    # → "管理服务组织机构设置"
+                    keyword = re.sub(r'[（(][^）)]*[）)]\s*$', '', keyword).strip()
                     if not keyword or len(keyword) < 2:
                         continue
 
@@ -760,6 +773,11 @@ def merge_documents_categorized(categories, output_path, log_callback=None):
     dst_doc = result
     log(f"  ✓ 已加载基础文档")
 
+    # 基础文档标题样式级 numPr → 直接格式（使其与后续复制的段落共用同一判定口径）
+    # 关键：使用基础文档【自身】样式作为"源样式"依据，才能正确区分
+    # "原为自动编号"与"原为纯文本"的同类标题（如"需求对接" vs "渠道类型"）。
+    _promote_heading_style_numbering(dst_doc, log)
+
     # 设置页边距（使用统一函数，与后处理保持一致）
     _normalize_section_margins(dst_doc, log, verbose=True)
 
@@ -934,6 +952,80 @@ def _clear_body_content(doc, log):
         log(f"    → 已清空 {len(to_remove)} 个元素（段落+表格），保留 sectPr")
 
 
+def _promote_heading_style_numbering(doc, log=None):
+    """
+    合并前：把文档中"自身样式定义含 w:numPr"的【标题段落】的样式级自动编号，
+    提升到段落【直接格式】(w:pPr/w:numPr)。
+
+    目的：让 _had_auto_numbering 之后仅依据"段落直接 numPr"判断标题是否
+    原为自动编号。若仅依赖样式定义判断，会因 style_map 映射到目标样式，
+    无法区分"原为自动编号"与"原为纯文本"的同类标题（如"需求对接" vs "渠道类型"）。
+
+    使用文档【自身】样式作为"源样式"依据（doc 即该文档本身），因此能正确
+    反映该文档内每个标题是否参与自动编号。仅对标题段落操作，与
+    _strip_heading_auto_numbering 的处理范围一致。
+    """
+    from docx.oxml.ns import qn as _qn
+    import copy as _cpy
+    import re as _re
+
+    try:
+        body = doc.element.body
+    except Exception:
+        return
+
+    # 收集标题样式 id
+    heading_ids = set()
+    for style in doc.styles:
+        try:
+            sname = (style.name or '').strip()
+        except Exception:
+            continue
+        if _re.match(r'^(Heading|标题)\s*\d+$', sname, _re.IGNORECASE):
+            heading_ids.add(style.style_id)
+
+    if not heading_ids:
+        return
+
+    for p in body.iter(_qn('w:p')):
+        pPr = p.find(_qn('w:pPr'))
+        if pPr is None:
+            continue
+        pStyle = pPr.find(_qn('w:pStyle'))
+        if pStyle is None:
+            continue
+        sid = pStyle.get(_qn('w:val'))
+        if not sid or sid not in heading_ids:
+            continue
+        # 已有直接 numPr 则跳过（避免重复）
+        if pPr.find(_qn('w:numPr')) is not None:
+            continue
+        try:
+            # 直接从 XML 层面查找样式定义（版本无关）：
+            # 部分 python-docx 版本的 Styles.get_by_id 需要 style_type 第二参数，
+            # 单参数调用会抛 TypeError（被 except 吞掉），导致样式级 numPr 提升从未执行。
+            _style_el = None
+            for _st in doc.styles.element.findall(_qn('w:style')):
+                if _st.get(_qn('w:styleId')) == sid:
+                    _style_el = _st
+                    break
+            if _style_el is None:
+                continue
+            spPr = _style_el.find(_qn('w:pPr'))
+            if spPr is None:
+                continue
+            s_num_pr = spPr.find(_qn('w:numPr'))
+            if s_num_pr is None:
+                continue
+            s_nid = s_num_pr.find(_qn('w:numId'))
+            if s_nid is None or s_nid.get(_qn('w:val')) in (None, '0'):
+                continue
+            _cloned = _cpy.deepcopy(s_num_pr)
+            pStyle.addnext(_cloned)
+        except Exception:
+            continue
+
+
 def _strip_heading_auto_numbering(doc, log):
     """
     后处理：剥离所有标题的 Word 自动编号并回填静态文字编号前缀。
@@ -978,10 +1070,9 @@ def _strip_heading_auto_numbering(doc, log):
         return lvl if 1 <= lvl <= 5 else 0
 
     # ---- 0) 收集标题 style_id → level（注意：不修改样式定义！）----
-    # 说明：若在此处删除样式级 w:numPr，会影响所有使用该样式的段落
-    #       （含表格内标题），导致表格编号被一并删除且无回填补救。
-    #       因此改为只对【正文段落】写入 numId='0' 覆盖样式级编号，
-    #       表格段落完全不动、保持其原始样式绑定。
+    # 说明：不在样式层面删除 w:numPr（会波及所有段落且无法回补）。
+    #       改为对【每个标题段落】写入 numId='0' 覆盖其样式级自动编号；
+    #       表格内标题：仅对"原本自动编号"的回填静态前缀，其余保持源文字原样。
     heading_style_ids = {}   # style_id -> level
     for style in doc.styles:
         lvl = _heading_level(style)
@@ -1048,17 +1139,60 @@ def _strip_heading_auto_numbering(doc, log):
         用 numId='0' 覆盖该段落的样式级自动编号。
 
         写入/修改段落 pPr 内的 w:numPr/w:numId='0'，使该段落不再参与
-        多级列表计数（保留表格不受影响，因为表格段落不进入本函数）。
+        多级列表计数。
+
+        OOXML schema 要求 numPr 位于 pStyle 之后、其他子元素之前，
+        若追加到 pPr 末尾则 Word 可能忽略该 numPr，导致样式级编号仍生效
+        （出现双重编号：自动编号 + 回填静态编号）。
         """
         num_pr = pPr.find(_qn('w:numPr'))
         if num_pr is None:
             num_pr = _OxmlElement('w:numPr')
-            pPr.append(num_pr)
+            # 插入到 pStyle 之后（OOXML CT_PPr 规范顺序），确保 Word 能正确解析
+            pStyle = pPr.find(_qn('w:pStyle'))
+            if pStyle is not None:
+                pStyle.addnext(num_pr)
+            else:
+                pPr.insert(0, num_pr)
         numId = num_pr.find(_qn('w:numId'))
         if numId is None:
             numId = _OxmlElement('w:numId')
             num_pr.append(numId)
         numId.set(_qn('w:val'), '0')
+
+    # ---- 判断段落是否在表格内 ----
+    def _is_inside_table(p):
+        """
+        沿 DOM 树向上查找，判断段落 p 是否直接或间接嵌套在 w:tbl 中。
+        表格内标题：关闭自动编号，但不回填静态序号，保持源文字原样。
+        """
+        parent = p.getparent()
+        tbl_tag = _qn('w:tbl')
+        while parent is not None:
+            if parent.tag == tbl_tag:
+                return True
+            parent = parent.getparent()
+        return False
+
+    # ---- 判定段落是否曾参与 Word 自动编号（多级列表）----
+    def _had_auto_numbering(pPr, sid=None):
+        """
+        返回 True 表示该标题原本由 Word 自动编号生成，需要转成静态前缀；
+        False 表示纯文本（含已打字编号 / 无编号），保持原样。
+
+        判定口径：仅依据【段落直接格式】的 w:numPr/numId(!=0)。
+        样式级 numPr 不再作为依据——因为它在合并后经 style_map 指向目标样式，
+        无法区分"源文档原为自动编号"与"源文档原为纯文本"的同类标题
+        （如"需求对接" vs "渠道类型"）。合并前已由 _promote_heading_style_numbering
+        （基础文档）和 copy_all_content（复制段落）把"源样式级 numPr"提升为段落
+        直接格式，因此直接格式已能忠实反映源文档的自动编号参与情况。
+        """
+        num_pr = pPr.find(_qn('w:numPr'))
+        if num_pr is not None:
+            numId = num_pr.find(_qn('w:numId'))
+            if numId is not None and numId.get(_qn('w:val')) not in (None, '0'):
+                return True
+        return False
 
     # ---- 主扫描：剥离段落内联编号 + 回填静态编号 ----
     body = doc.element.body
@@ -1079,8 +1213,17 @@ def _strip_heading_auto_numbering(doc, log):
 
         lvl = heading_style_ids[sid]
 
-        # ① 用 numId='0' 覆盖样式级自动编号（仅在正文段落；表格不进入此函数）
+        # 在关闭自动编号之前，先记录该段落原本是否参与 Word 自动编号
+        was_auto = _had_auto_numbering(pPr, sid)
+
+        # ① 关闭所有 H2-H5 段落的样式级自动编号（正文和表格都处理）
+        #    否则表格内标题会继承跨表格的 Word 多级列表序号（如 32. xxx）
         _disable_para_numbering(pPr)
+
+        # 表格内标题段落：仅对"原本自动编号"的回填静态序号；
+        # 其余（纯文本 / 已打字编号 / 无编号）保持源文字原样，不回填
+        if _is_inside_table(p) and not was_auto:
+            continue
 
         full = _get_full_text(p).strip()
         if not full:

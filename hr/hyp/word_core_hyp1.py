@@ -327,6 +327,62 @@ def copy_all_content(src_doc, dst_doc, log_callback=None, style_map=None, num_id
         if log_callback:
             log_callback(msg)
 
+    import copy as _cpy
+
+    def _promote_para(src_p, dst_p):
+        """把【源样式级】 w:numPr 提升到 dst 段落直接格式。
+
+        仅当 src 段落直接格式无 numPr、且源样式定义含有效 numId 时，
+        将源样式里的 w:numPr 深拷贝到 dst 段落 w:pPr（pStyle 之后）。
+        dst 若已直接含 numPr（含显式 numId=0 关闭编号）则不覆盖，
+        以确保源文档中"已显式关闭编号"的段落（如表格内"渠道类型"）
+        保持无编号、不被误提升。
+        """
+        _src_pPr = src_p.find(qn('w:pPr'))
+        if _src_pPr is None:
+            return
+        _src_pStyle = _src_pPr.find(qn('w:pStyle'))
+        if _src_pStyle is None:
+            return
+        _src_sid = _src_pStyle.get(qn('w:val'))
+        if not _src_sid:
+            return
+        # 直接从 XML 层面查找源样式定义（版本无关）：
+        # 部分 python-docx 版本的 Styles.get_by_id 需要 style_type 第二参数，
+        # 单参数调用会抛 TypeError（被 except 吞掉），导致样式级 numPr 提升从未执行。
+        _src_style_el = None
+        try:
+            _styles_root = src_doc.styles.element
+            for _st in _styles_root.findall(qn('w:style')):
+                if _st.get(qn('w:styleId')) == _src_sid:
+                    _src_style_el = _st
+                    break
+        except Exception:
+            return
+        if _src_style_el is None:
+            return
+        _src_style_pPr = _src_style_el.find(qn('w:pPr'))
+        if _src_style_pPr is None:
+            return
+        _src_num_pr = _src_style_pPr.find(qn('w:numPr'))
+        if _src_num_pr is None:
+            return
+        _src_nid = _src_num_pr.find(qn('w:numId'))
+        if _src_nid is None or _src_nid.get(qn('w:val')) in (None, '0'):
+            return
+        _dst_pPr = dst_p.find(qn('w:pPr'))
+        if _dst_pPr is None:
+            return
+        # 目标段落直接格式已含 numPr（含 numId=0 显式关闭）则保留，不覆盖
+        if _dst_pPr.find(qn('w:numPr')) is not None:
+            return
+        _cloned_np = _cpy.deepcopy(_src_num_pr)
+        _dst_pStyle = _dst_pPr.find(qn('w:pStyle'))
+        if _dst_pStyle is not None:
+            _dst_pStyle.addnext(_cloned_np)
+        else:
+            _dst_pPr.insert(0, _cloned_np)
+
     dst_body = dst_doc.element.body
     count = 0
 
@@ -344,6 +400,16 @@ def copy_all_content(src_doc, dst_doc, log_callback=None, style_map=None, num_id
                 # 应用样式映射（方案 A）
                 if style_map:
                     _apply_style_map(new_el, style_map)
+
+                # 把【源样式级】 w:numPr 提升到段落直接格式：
+                # 正文段落直接处理；表格则递归处理其内部所有 w:p 段落。
+                if tag == 'p':
+                    _promote_para(child, new_el)
+                else:  # tag == 'tbl'
+                    _src_paras = child.findall('.//' + qn('w:p'))
+                    _dst_paras = new_el.findall('.//' + qn('w:p'))
+                    for _sp, _dp in zip(_src_paras, _dst_paras):
+                        _promote_para(_sp, _dp)
 
                 # 应用编号 ID 重映射（numbering.xml 合并后的 numId 对齐）
                 if num_id_map and len(new_el) > 0:
