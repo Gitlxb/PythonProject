@@ -8,6 +8,14 @@ from datetime import datetime
 from tkinter import filedialog, messagebox, ttk
 
 from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
+
+# 复用简化版的 SplitGroupDialog 自定义组合拆分弹窗
+# 包模式(main.py 通过 hr.hyp 导入)走相对导入；独立运行(python cf_gzbcf_hyp.py)回退到同目录直接导入
+try:
+    from .cf_gzbcf_hyp_simple import SplitGroupDialog
+except ImportError:
+    from cf_gzbcf_hyp_simple import SplitGroupDialog
 
 # 配置日志（仅控制台输出，不生成日志文件）
 logging.basicConfig(
@@ -33,6 +41,9 @@ class SplitExcelApp:
             self._is_top_level = False
 
         self.parent = parent
+        # 弹窗归属父窗口：嵌入模式下指向嵌入容器(parent)，避免 messagebox/filedialog
+        # 因缺少 parent 而误将主窗口(浙江锦途)置顶遮挡操作界面；独立窗口时回退到自身 root
+        self._dialog_parent = parent if parent is not None else self.root
 
         self.filepath = ""
         self.wb = None
@@ -114,10 +125,11 @@ class SplitExcelApp:
     #  文件 / 工作表选择
     # ------------------------------------------------------------------ #
     def _choose_file(self):
-        path = filedialog.askopenfilename(filetypes=[("Excel文件", "*.xlsx")])
+        path = filedialog.askopenfilename(filetypes=[("Excel文件", "*.xlsx")], parent=self._dialog_parent)
         if not path:
-            self.root.lift()
-            self.root.focus_force()
+            if self._is_top_level:
+                self.root.lift()
+                self.root.focus_force()
             return
         self.filepath = path
         self.entry_file.delete(0, tk.END)
@@ -134,10 +146,11 @@ class SplitExcelApp:
                 self._on_sheet_selected(None)
             self._log(f"已加载文件: {os.path.basename(path)}")
         except Exception as e:
-            messagebox.showerror("错误", f"无法加载文件:\n{e}")
+            messagebox.showerror("错误", f"无法加载文件:\n{e}", parent=self._dialog_parent)
         finally:
-            self.root.lift()
-            self.root.focus_force()
+            if self._is_top_level:
+                self.root.lift()
+                self.root.focus_force()
 
     def _on_sheet_selected(self, _):
         if not self.wb:
@@ -165,11 +178,11 @@ class SplitExcelApp:
     def _choose_split_groups(self):
         """弹出自定义组合拆分对话框（使用 SplitGroupDialog）"""
         if not self.filepath or not self.ws:
-            messagebox.showwarning("提示", "请先选择Excel文件和工作表")
+            messagebox.showwarning("提示", "请先选择Excel文件和工作表", parent=self._dialog_parent)
             return
         col_text = self.combo_col.get()
         if not col_text:
-            messagebox.showwarning("提示", "请先选择拆分依据列")
+            messagebox.showwarning("提示", "请先选择拆分依据列", parent=self._dialog_parent)
             return
 
         self.split_col_idx = int(col_text.split(".")[0])
@@ -184,7 +197,8 @@ class SplitExcelApp:
                 "确认表尾",
                 f"检测到数据区域: 第3行 ~ 第{suggested_footer - 1}行\n"
                 f"表尾起始行: 第{suggested_footer}行 (共 {max_row - suggested_footer + 1} 行)\n\n"
-                f"是否确认？"
+                f"是否确认？",
+                parent=self._dialog_parent,
             )
             if not confirm:
                 return
@@ -207,13 +221,11 @@ class SplitExcelApp:
                     dept_order_tmp.append(dept)
 
         if not dept_order_tmp:
-            messagebox.showwarning("提示", "未找到有效的拆分值")
+            messagebox.showwarning("提示", "未找到有效的拆分值", parent=self._dialog_parent)
             return
 
-        # 使用 SplitGroupDialog 弹窗
-        from hr.cf_gzbcf_hyp_simple import SplitGroupDialog
-
-        dialog = SplitGroupDialog(self.root, dept_order_tmp)
+        # 使用 SplitGroupDialog 弹窗（SplitGroupDialog 已在模块顶部导入）
+        dialog = SplitGroupDialog(self._dialog_parent, dept_order_tmp)
         self.root.wait_window(dialog)
 
         if dialog.result is not None:
@@ -236,7 +248,7 @@ class SplitExcelApp:
     # ------------------------------------------------------------------ #
     def _start_split(self):
         if not self.filepath or not self.ws:
-            messagebox.showwarning("提示", "请先选择Excel文件和工作表")
+            messagebox.showwarning("提示", "请先选择Excel文件和工作表", parent=self._dialog_parent)
             return
 
         self.btn_open_dir.config(state="disabled")
@@ -244,7 +256,7 @@ class SplitExcelApp:
 
         col_text = self.combo_col.get()
         if not col_text:
-            messagebox.showwarning("提示", "请选择拆分依据列")
+            messagebox.showwarning("提示", "请选择拆分依据列", parent=self._dialog_parent)
             return
 
         self.split_col_idx = int(col_text.split(".")[0])
@@ -254,14 +266,15 @@ class SplitExcelApp:
         if not self.footer_confirmed:
             suggested_footer = self._detect_footer(self.ws, self.split_col_idx)
             if suggested_footer > max_row:
-                messagebox.showinfo("提示", "未检测到表尾，所有行将被视为数据行")
+                messagebox.showinfo("提示", "未检测到表尾，所有行将被视为数据行", parent=self._dialog_parent)
                 self.footer_start = max_row + 1
             else:
                 confirm = messagebox.askyesno(
                     "确认表尾",
                     f"检测到数据区域: 第3行 ~ 第{suggested_footer - 1}行\n"
                     f"表尾起始行: 第{suggested_footer}行 (共 {max_row - suggested_footer + 1} 行)\n\n"
-                    f"是否确认并开始拆分？"
+                    f"是否确认并开始拆分？",
+                    parent=self._dialog_parent,
                 )
                 if not confirm:
                     return
@@ -288,7 +301,7 @@ class SplitExcelApp:
                     self.dept_rows[dept].append(r)
 
         if not self.dept_order:
-            messagebox.showwarning("提示", "未找到有效的拆分值")
+            messagebox.showwarning("提示", "未找到有效的拆分值", parent=self._dialog_parent)
             return
 
         self._log(f"检测到 {len(self.dept_order)} 个拆分对象: {', '.join(self.dept_order)}")
@@ -345,7 +358,7 @@ class SplitExcelApp:
             )
 
         self._log("拆分完成!")
-        messagebox.showinfo("完成", f"拆分完成，共生成 {len(tasks)} 个文件，保存在:\n{self.output_dir}")
+        messagebox.showinfo("完成", f"拆分完成，共生成 {len(tasks)} 个文件，保存在:\n{self.output_dir}", parent=self._dialog_parent)
         self.btn_open_dir.config(state="normal")
 
     # ------------------------------------------------------------------ #
@@ -524,15 +537,46 @@ class SplitExcelApp:
                     col_name_to_indices[name] = []
                 col_name_to_indices[name].append(c)
 
-        # 5.5.1 个税列强制填充
+        # 5.5.1 个税列强制填充（按表头名动态定位依赖列，替代硬编码 AK/AJ/AT/AM/AN）
         tax_filled = 0
         if "个税" in col_name_to_indices:
             tax_col = col_name_to_indices["个税"][0]  # 取第一个
-            for r in range(3, new_data_last_row + 1):
-                formula = f"=-ROUND(MAX((AK{r}-5000-AJ{r}-AT{r}+AM{r}+AN{r})*{{3,10,20,25,30,35,45}}%-5*{{0,42,282,532,882,1432,3032}},),2)"
-                ws_new.cell(r, tax_col).value = formula
-                tax_filled += 1
-            logger.info(f"  个税公式填充: {tax_filled} 个单元格 (列{tax_col})")
+            # 个税公式依赖列：列字母随模板变化，按表头名定位
+            # AK=税前工资  AJ=专项附加扣除  AT=通讯费  AM=社保个人扣款  AN=公积金扣款-个人
+            tax_field_headers = {
+                "taxable_base": "税前工资",
+                "subtract_deduction": "专项附加扣除",
+                "subtract_allowance": "通讯费",
+                "add_social": "社保个人扣款",
+                "add_fund": "公积金扣款-个人",
+            }
+            tax_field_cols = {}
+            tax_missing = []
+            for key, hdr in tax_field_headers.items():
+                cols = col_name_to_indices.get(hdr)
+                if cols:
+                    tax_field_cols[key] = cols[0]
+                else:
+                    tax_missing.append(hdr)
+            if tax_missing:
+                logger.warning(
+                    f"  个税依赖列未全部定位（缺失 {tax_missing}），保留原表'个税'列数值，未覆盖写入公式"
+                )
+            else:
+                tb = get_column_letter(tax_field_cols["taxable_base"])
+                sd = get_column_letter(tax_field_cols["subtract_deduction"])
+                ea = get_column_letter(tax_field_cols["subtract_allowance"])
+                sp = get_column_letter(tax_field_cols["add_social"])
+                fp = get_column_letter(tax_field_cols["add_fund"])
+                for r in range(3, new_data_last_row + 1):
+                    formula = (
+                        f"=-ROUND(MAX(({tb}{r}-5000-{sd}{r}-{ea}{r}+{sp}{r}+{fp}{r})"
+                        f"*{{3,10,20,25,30,35,45}}%"
+                        f"-5*{{0,42,282,532,882,1432,3032}},),2)"
+                    )
+                    ws_new.cell(r, tax_col).value = formula
+                    tax_filled += 1
+                logger.info(f"  个税公式填充: {tax_filled} 个单元格 (列{tax_col})")
 
         # ---- 步骤5.6：社保处理（根据个人扣款填充AS列单位扣款） ----
         ss_personal_cols = col_name_to_indices.get("社保个人扣款", [])
@@ -543,6 +587,14 @@ class SplitExcelApp:
             ss_personal_col = ss_personal_cols[0]          # 社保个人扣款列（AM）
             ss_company_as_col = ss_company_cols[-1]        # AS列（右边那列，取最后一个）
 
+            # 动态定位 XLOOKUP 查找键列（身份证编号），替代硬编码 E 列；缺失时回退 E 列
+            id_cols = col_name_to_indices.get("身份证编号")
+            if id_cols:
+                id_letter = get_column_letter(id_cols[0])
+            else:
+                id_letter = "E"
+                logger.warning("  未找到'身份证编号'列，社保 XLOOKUP 查找键回退为 E 列")
+
             for r in range(3, new_data_last_row + 1):
                 # 检测社保个人扣款是否有数据（包括0，只要不为None）
                 personal_val = ws_new.cell(r, ss_personal_col).value
@@ -550,10 +602,10 @@ class SplitExcelApp:
 
                 if has_data:
                     # 在AS列填充单位扣款公式
-                    formula_company = f"=XLOOKUP(E{r},社保!$A$2:$A$110,-社保!$C$2:$C$110,0)"
+                    formula_company = f"=XLOOKUP({id_letter}{r},社保!$A$2:$A$110,-社保!$C$2:$C$110,0)"
                     ws_new.cell(r, ss_company_as_col).value = formula_company
                     # 在个人扣款列填充公式（覆盖原值）
-                    formula_personal = f"=XLOOKUP(E{r},社保!$A$2:$A$110,-社保!$D$2:$D$110,0)"
+                    formula_personal = f"=XLOOKUP({id_letter}{r},社保!$A$2:$A$110,-社保!$D$2:$D$110,0)"
                     ws_new.cell(r, ss_personal_col).value = formula_personal
                     ss_filled += 1
                     logger.debug(f"    行{r}: 个人扣款有数据 → AS列+个人扣款列均填充公式")
@@ -653,7 +705,7 @@ class SplitExcelApp:
         if self.output_dir and os.path.exists(self.output_dir):
             os.startfile(self.output_dir)
         else:
-            messagebox.showwarning("提示", "输出目录不存在")
+            messagebox.showwarning("提示", "输出目录不存在", parent=self._dialog_parent)
 
     # ------------------------------------------------------------------ #
     #  工具方法（合并单元格 / 表尾检测 / 样式复制 / 公式调整 / Sheet命名）

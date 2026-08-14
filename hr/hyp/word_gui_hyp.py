@@ -14,6 +14,7 @@ v4 新特性：
   - 左右分栏布局（操作区 | 日志区）
   - 第3步关键词分组就地可编辑
   - 增量搜索（仅重搜修改过的分类）
+  - 模式指示器（自动显示 0-X分 / 主观 / 满分值 检测模式）
 """
 
 import tkinter as tk
@@ -48,12 +49,15 @@ class WordMergeApp:
         self.output_path_var = tk.StringVar()
         self._category_texts = []            # [(parent, Text_widget), ...] 第3步编辑面板
         self._last_keywords_snapshot = {}    # {cat_idx: frozenset(keywords)} 增量搜索快照
+        self.detected_modes = set()          # 跨文档累计检测到的模式 {"0-X分", "主观", "满分值"}
 
         self._build_ui()
 
-    # ========================================================
-    #  UI 构建 — 左右分栏
-    # ========================================================
+    @property
+    def _parent_window(self):
+        """返回顶层父窗口，用于文件对话框和消息框的 parent 参数。"""
+        return self.root.winfo_toplevel()
+
 
     def _build_ui(self):
         # ---- 主分栏容器 ----
@@ -93,6 +97,15 @@ class WordMergeApp:
         ttk.Button(btn_row, text="提取关键词", command=self._extract_keywords, width=12).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Label(btn_row, text="提取后可在下方分类面板中直接编辑关键词（每行一个）",
                   font=("Microsoft YaHei UI", 8), foreground="#888888").pack(side=tk.LEFT)
+
+        # 模式指示标签
+        self.mode_indicator_var = tk.StringVar(value="")
+        self.mode_indicator = ttk.Label(
+            btn_row,
+            textvariable=self.mode_indicator_var,
+            font=("Microsoft YaHei UI", 9, "bold"),
+            foreground="#1976D2")
+        self.mode_indicator.pack(side=tk.LEFT, padx=(12, 0))
 
         # 分类编辑滚动区域
         self.kw_canvas_frame = ttk.Frame(self.step3)
@@ -221,7 +234,7 @@ class WordMergeApp:
     # ========================================================
 
     def _browse_standard_docs(self):
-        paths = filedialog.askopenfilenames(
+        paths = filedialog.askopenfilenames(parent=self._parent_window, 
             title="选择评标办法文档（可多选）",
             filetypes=[("Word 文档", "*.docx *.doc"), ("所有文件", "*.*")])
         if paths:
@@ -235,7 +248,7 @@ class WordMergeApp:
                 self._log(f"    {os.path.basename(p)}")
 
     def _browse_folder(self):
-        path = filedialog.askdirectory(title="选择搜索文件夹")
+        path = filedialog.askdirectory(parent=self._parent_window, title="选择搜索文件夹")
         if path:
             self.folder_path_var.set(path)
             self._log(f"✓ 已选择搜索文件夹: {path}")
@@ -243,7 +256,7 @@ class WordMergeApp:
     def _browse_output(self):
         desktop = os.path.join(os.path.expanduser("~"), "Desktop")
         initial_dir = desktop if os.path.exists(desktop) else None
-        path = filedialog.asksaveasfilename(
+        path = filedialog.asksaveasfilename(parent=self._parent_window, 
             title="选择输出文件路径", defaultextension=".docx",
             filetypes=[("Word 文档", "*.docx"), ("所有文件", "*.*")],
             initialfile="合并结果.docx", initialdir=initial_dir)
@@ -269,14 +282,14 @@ class WordMergeApp:
         import subprocess
         path = self.output_path_var.get().strip()
         if not path:
-            messagebox.showinfo("提示", "请先选择输出文件路径（浏览）或完成合并")
+            messagebox.showinfo("提示", "请先选择输出文件路径（浏览）或完成合并", parent=self._parent_window)
             return
         directory = os.path.dirname(path)
         if os.path.isdir(directory):
             subprocess.Popen(['explorer', directory])
             self._log(f"✓ 已打开目录: {directory}")
         else:
-            messagebox.showwarning("提示", f"目录不存在：{directory}")
+            messagebox.showwarning("提示", f"目录不存在：{directory}", parent=self._parent_window)
 
     # ========================================================
     #  提取关键词 + 构建分类编辑面板
@@ -284,11 +297,11 @@ class WordMergeApp:
 
     def _extract_keywords(self):
         if not self.standard_docs:
-            messagebox.showwarning("提示", "请先选择评标办法文档（第1步）")
+            messagebox.showwarning("提示", "请先选择评标办法文档（第1步）", parent=self._parent_window)
             return
         folder = self.folder_path_var.get()
         if not folder or not os.path.isdir(folder):
-            messagebox.showwarning("提示", "请先选择搜索文件夹（第2步）")
+            messagebox.showwarning("提示", "请先选择搜索文件夹（第2步）", parent=self._parent_window)
             return
 
         self._log("=" * 50)
@@ -298,10 +311,22 @@ class WordMergeApp:
             self.standard_docs, log_callback=self._log)
 
         if not success:
-            messagebox.showerror("提取失败", result)
+            messagebox.showerror("提取失败", result, parent=self._parent_window)
             return
 
         self.categories = result
+
+        # ---- 检测模式并更新指示器 ----
+        self.detected_modes = set()
+        for cat in self.categories:
+            t = cat.get("type", "")
+            if t == "score":
+                self.detected_modes.add("0-X分")
+            elif t in ("subjective_split", "subjective_direct"):
+                self.detected_modes.add("主观")
+            elif t == "maxscore":
+                self.detected_modes.add("满分值")
+        self._update_mode_indicator()
 
         # ---- 构建分类编辑面板 ----
         self._build_category_editors()
@@ -346,6 +371,25 @@ class WordMergeApp:
             self._category_texts.append((parent, kw_text))
 
     # ========================================================
+    #  模式指示器
+    # ========================================================
+
+    def _update_mode_indicator(self):
+        """根据 detected_modes 更新步骤3的模式指示标签。"""
+        if not self.detected_modes:
+            self.mode_indicator_var.set("")
+            return
+        if len(self.detected_modes) == 1:
+            mode = list(self.detected_modes)[0]
+            colors = {"0-X分": "#2E7D32", "主观": "#E65100", "满分值": "#1976D2"}
+            self.mode_indicator.configure(foreground=colors.get(mode, "#1976D2"))
+            self.mode_indicator_var.set(f"● {mode}模式")
+        else:
+            self.mode_indicator.configure(foreground="#7B1FA2")
+            modes = "、".join(sorted(self.detected_modes))
+            self.mode_indicator_var.set(f"● 混合: {modes}")
+
+    # ========================================================
     #  增量搜索
     # ========================================================
 
@@ -362,10 +406,10 @@ class WordMergeApp:
 
         folder = self.folder_path_var.get()
         if not folder or not os.path.isdir(folder):
-            messagebox.showwarning("提示", "请先选择搜索文件夹（第2步）")
+            messagebox.showwarning("提示", "请先选择搜索文件夹（第2步）", parent=self._parent_window)
             return
         if not self.categories:
-            messagebox.showwarning("提示", "请先提取关键词（第3步）")
+            messagebox.showwarning("提示", "请先提取关键词（第3步）", parent=self._parent_window)
             return
 
         # ---- 判断增量搜索还是全量搜索 ----
@@ -446,7 +490,7 @@ class WordMergeApp:
         self.result_listbox.bind("<ButtonRelease-1>", self._on_click)
 
         if total_files == 0:
-            messagebox.showwarning("搜索结果", "未找到匹配的文件")
+            messagebox.showwarning("搜索结果", "未找到匹配的文件", parent=self._parent_window)
         else:
             change_tag = "增量" if not first_run and unchanged_indices else "全量"
             self._log(f"\n✓ 搜索完成（{change_tag}），共匹配 {total_files} 个文件"
@@ -544,13 +588,13 @@ class WordMergeApp:
         output_path = self.output_path_var.get().strip()
 
         if not self.standard_docs:
-            messagebox.showwarning("警告", "请先选择评标办法文档（第1步）")
+            messagebox.showwarning("警告", "请先选择评标办法文档（第1步）", parent=self._parent_window)
             return
         if not self.folder_path_var.get() or not os.path.isdir(self.folder_path_var.get()):
-            messagebox.showwarning("警告", "请先选择搜索文件夹（第2步）")
+            messagebox.showwarning("警告", "请先选择搜索文件夹（第2步）", parent=self._parent_window)
             return
         if not self._result_entries:
-            messagebox.showwarning("警告", "请先搜索文件（第4步）")
+            messagebox.showwarning("警告", "请先搜索文件（第4步）", parent=self._parent_window)
             return
 
         # 收集勾选的文件（按分类）
@@ -561,7 +605,7 @@ class WordMergeApp:
                 checked_by_cat.setdefault(ci, []).append(entry["path"])
 
         if not checked_by_cat:
-            messagebox.showwarning("警告", "请至少勾选一个要合并的文件")
+            messagebox.showwarning("警告", "请至少勾选一个要合并的文件", parent=self._parent_window)
             return
 
         merge_categories = []
@@ -596,10 +640,10 @@ class WordMergeApp:
 
         if success:
             self._log(f"\n✓ 合并成功！已保存到: {output_path}")
-            messagebox.showinfo("完成", f"合并完成！\n\n保存路径：{output_path}")
+            messagebox.showinfo("完成", f"合并完成！\n\n保存路径：{output_path}", parent=self._parent_window)
         else:
             self._log(f"\n✗ 合并失败: {msg}")
-            messagebox.showerror("错误", msg)
+            messagebox.showerror("错误", msg, parent=self._parent_window)
 
     # ========================================================
     #  独立运行入口

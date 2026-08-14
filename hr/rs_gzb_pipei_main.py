@@ -17,6 +17,44 @@ from hr.rs_gzb_pipei import (
 )
 
 
+def _make_modal(dialog, toplevel):
+    """把自定义 Toplevel 配置为可正确恢复的模态对话框。
+
+    修复 Win+D 最小化后 Alt+Tab 无法回到操作界面、界面卡死（只能任务管理器
+    结束任务）的问题：根因是 grab_set() 在窗口最小化后仍占用输入，恢复时主
+    窗口可见但输入被重定向到不可见的对话框。这里在最小化时释放 grab、恢复时
+    重建 grab 并置顶。
+    """
+    dialog.transient(toplevel)
+    dialog.grab_set()
+    state = {"grabbed": True}
+
+    def on_unmap(event):
+        if state["grabbed"]:
+            try:
+                dialog.grab_release()
+            except tk.TclError:
+                pass
+            state["grabbed"] = False
+
+    def on_map(event):
+        if not state["grabbed"]:
+            try:
+                dialog.grab_set()
+            except tk.TclError:
+                pass
+            state["grabbed"] = True
+        try:
+            dialog.lift()
+            dialog.focus_force()
+        except tk.TclError:
+            pass
+
+    dialog.bind("<Unmap>", on_unmap)
+    dialog.bind("<Map>", on_map)
+    return dialog
+
+
 class SalaryMatchApp:
     def __init__(self, root):
         self.root = root
@@ -100,11 +138,11 @@ class SalaryMatchApp:
                 wb_out.save(save_path)
                 self.log(f"已保存：{save_path}")
                 messagebox.showinfo(
-                    "完成", f"处理完成！\n已保存至：{save_path}"
+                    "完成", f"处理完成！\n已保存至：{save_path}", parent=self.root
                 )
                 return True
             except Exception as e:
-                messagebox.showerror("保存错误", str(e))
+                messagebox.showerror("保存错误", str(e), parent=self.root)
                 self.log(f"[保存错误] {e}")
                 return False
         else:
@@ -141,14 +179,13 @@ class SalaryMatchApp:
         dialog = tk.Toplevel(self.root)
         dialog.title("字段映射")
         dialog.geometry("850x650")
-        dialog.transient(self.root)
-        dialog.grab_set()
+        _make_modal(dialog, self.root)
         dialog.resizable(False, False)
 
         # 顶部标题
         ttk.Label(
             dialog,
-            text="请按顺序建立字段映射关系（左侧字段 对应 右侧字段，逐行数据对比）",
+            text="请按顺序建立字段映射关系（按键值匹配后逐字段对比数据 + 公式）",
             font=("Microsoft YaHei", 10),
         ).pack(pady=6)
 
@@ -186,14 +223,14 @@ class SalaryMatchApp:
             sel1 = lb1.curselection()
             sel2 = lb2.curselection()
             if not sel1 or not sel2:
-                messagebox.showwarning("提示", "请先从左侧和右侧各单击选择一个字段")
+                messagebox.showwarning("提示", "请先从左侧和右侧各单击选择一个字段", parent=dialog)
                 return
             f1 = lb1.get(sel1[0])
             f2 = lb2.get(sel2[0])
             # 检查是否已存在
             for a, b in mappings:
                 if a == f1 and b == f2:
-                    messagebox.showwarning("提示", "该映射已存在")
+                    messagebox.showwarning("提示", "该映射已存在", parent=dialog)
                     return
             mappings.append((f1, f2))
             listbox.insert(tk.END, f"{f1}   <-->   {f2}")
@@ -217,7 +254,7 @@ class SalaryMatchApp:
             if matched:
                 self.log(f"智能匹配：自动建立 {matched} 组映射")
             else:
-                messagebox.showinfo("提示", "未找到名称相同的字段，请手动添加")
+                messagebox.showinfo("提示", "未找到名称相同的字段，请手动添加", parent=dialog)
 
         ttk.Button(mid_frame, text="智能匹配", command=auto_match, width=14).pack(pady=8)
 
@@ -244,7 +281,7 @@ class SalaryMatchApp:
         bottom_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=4)
 
         list_frame = ttk.LabelFrame(
-            bottom_frame, text="已添加的映射（按此顺序逐行匹配数据）", padding=6
+            bottom_frame, text="已添加的映射（按此顺序逐字段对比数据）", padding=6
         )
         list_frame.pack(fill=tk.BOTH, expand=True)
 
@@ -293,7 +330,7 @@ class SalaryMatchApp:
                 mappings.pop(idx)
 
         def clear_all():
-            if mappings and messagebox.askyesno("确认", "确定清空所有已添加的映射？"):
+            if mappings and messagebox.askyesno("确认", "确定清空所有已添加的映射？", parent=dialog):
                 listbox.delete(0, tk.END)
                 mappings.clear()
 
@@ -307,7 +344,7 @@ class SalaryMatchApp:
 
         def on_ok():
             if not mappings:
-                messagebox.showwarning("提示", "请至少添加一组字段映射")
+                messagebox.showwarning("提示", "请至少添加一组字段映射", parent=dialog)
                 return
             result[0] = list(mappings)
             dialog.destroy()
@@ -333,13 +370,106 @@ class SalaryMatchApp:
             defaultextension=".xlsx",
             initialfile=default_name,
             filetypes=[("Excel 文件", "*.xlsx"), ("所有文件", "*.*")],
+            parent=self.root,
         )
+
+    # -------------------- 公共辅助方法 --------------------
+
+    def _auto_pick_key_field(self, var, headers):
+        """智能推荐关键列：优先'姓名'/'名字'/'名称'，否则取第一项"""
+        picked = ""
+        for h in headers:
+            if "姓名" in h or "名字" in h or "名称" in h:
+                picked = h
+                break
+        if not picked and headers:
+            picked = headers[0]
+        var.set(picked)
+
+    def _render_header_options(self, parent_frame, header_var, preview,
+                               on_headers_changed=None, max_display_cols=15):
+        """在指定 frame 中渲染表头行单选按钮，并通知当前表头字段"""
+        for widget in parent_frame.winfo_children():
+            widget.destroy()
+
+        if not preview:
+            if on_headers_changed:
+                on_headers_changed([])
+            return
+
+        ttk.Label(parent_frame, text="表头行:").pack(anchor=tk.W)
+        header_var.set(preview[0][0])
+
+        def _notify(data):
+            headers = [str(v).strip() for v in data if v is not None] if data else []
+            if on_headers_changed:
+                on_headers_changed(headers)
+
+        for row_idx, row_data in preview:
+            display_vals = []
+            for i, val in enumerate(row_data[:max_display_cols]):
+                if val is not None:
+                    display_vals.append(f"列{i + 1}:[{val}]")
+            display_text = "    ".join(display_vals) if display_vals else "(空行)"
+
+            rb_frame = ttk.Frame(parent_frame)
+            rb_frame.pack(fill=tk.X, pady=2)
+
+            def make_cmd(data):
+                def cmd():
+                    _notify(data)
+                return cmd
+
+            ttk.Radiobutton(
+                rb_frame, text=f"第 {row_idx} 行", variable=header_var, value=row_idx,
+                command=make_cmd(row_data)
+            ).pack(side=tk.LEFT)
+            ttk.Label(
+                rb_frame, text=display_text, font=("Consolas", 9), foreground="gray"
+            ).pack(side=tk.LEFT, padx=10)
+
+        # 初始化通知（默认第一行作为表头）
+        _notify(preview[0][1])
+
+    def _log_compare_result(self, total_info, compare_rows, diff_count, unmatched_keys):
+        """统一输出匹配结果、目标表差异、合计行参与情况、未匹配人员等日志"""
+        base_extra = "（含合计）" if total_info['base_has_total'] else ""
+        self.log(
+            f"对比完成：基准表 {total_info['base_data_rows']} 人{base_extra}"
+            f"，共匹配 {compare_rows} 人，发现 {diff_count} 个差异单元格"
+        )
+        t_extra = "（含合计）" if total_info['target_has_total'] else ""
+        self.log(f"  目标表数据行：{total_info['target_data_rows']} 人{t_extra}")
+
+        # 目标表多出/缺少
+        extra = total_info.get("extra_target_keys", [])
+        if extra:
+            self.log(f"  目标表中有 {len(extra)} 人未参与匹配：{', '.join(extra)}")
+        elif total_info["base_data_rows"] > total_info["target_data_rows"]:
+            diff = total_info["base_data_rows"] - total_info["target_data_rows"]
+            self.log(f"  目标表缺少 {diff} 人未匹配")
+
+        # 合计行参与情况
+        if total_info["base_has_total"] and total_info["target_has_total"]:
+            if total_info["participated"]:
+                self.log(f"  【含合计行匹配】两边数据行数相等，合计行参与对比")
+            else:
+                self.log(f"  【合计行未参与】基准 {total_info['base_data_rows']} 行 vs"
+                         f" 目标 {total_info['target_data_rows']} 行，数据行数不等，合计行不参与")
+        elif total_info["base_has_total"]:
+            self.log(f"  【合计行未参与】仅基准表有合计行，目标表无")
+        elif total_info["target_has_total"]:
+            self.log(f"  【合计行未参与】仅目标表有合计行，基准表无")
+
+        # 未匹配人员
+        if unmatched_keys:
+            self.log(f"  未匹配人员（{len(unmatched_keys)} 人）：{', '.join(unmatched_keys)}")
 
     # -------------------- 综合配置弹窗 --------------------
 
-    def _build_source_frame(self, parent, title, master):
+    def _build_source_frame(self, parent, title, master, on_headers_changed=None):
         """构建一个Excel数据源配置面板，包含文件选择、工作簿选择、表头行选择。
-        返回控件引用字典，便于后续读取配置值。
+        :param on_headers_changed: 可选回调，参数为当前headers列表（在切换工作簿/表头行时调用）
         """
         frame = ttk.LabelFrame(parent, text=title, padding=10)
 
@@ -376,31 +506,10 @@ class SalaryMatchApp:
                 messagebox.showerror("错误", str(e), parent=master)
                 return
 
-            # 清空并重建表头行选择
-            for widget in header_frame.winfo_children():
-                widget.destroy()
-
-            if not preview:
-                return
-
-            ttk.Label(header_frame, text="表头行:", width=10).pack(side=tk.LEFT)
-            header_var.set(preview[0][0])
-
-            for row_idx, row_data in preview:
-                display_vals = []
-                for i, val in enumerate(row_data[:15]):
-                    if val is not None:
-                        display_vals.append(f"列{i + 1}:[{val}]")
-                display_text = "    ".join(display_vals) if display_vals else "(空行)"
-
-                rb_frame = ttk.Frame(header_frame)
-                rb_frame.pack(fill=tk.X, pady=2)
-                ttk.Radiobutton(
-                    rb_frame, text=f"第 {row_idx} 行", variable=header_var, value=row_idx
-                ).pack(side=tk.LEFT)
-                ttk.Label(
-                    rb_frame, text=display_text, font=("Consolas", 9), foreground="gray"
-                ).pack(side=tk.LEFT, padx=10)
+            self._render_header_options(
+                header_frame, header_var, preview,
+                on_headers_changed=on_headers_changed
+            )
 
         sheet_combo.bind("<<ComboboxSelected>>", on_sheet_selected)
 
@@ -426,6 +535,8 @@ class SalaryMatchApp:
                     sheet_var.set("")
                     for widget in header_frame.winfo_children():
                         widget.destroy()
+                    if on_headers_changed:
+                        on_headers_changed([])
 
         browse_btn = ttk.Button(file_frame, text="浏览...", command=on_browse, width=10)
         browse_btn.pack(side=tk.LEFT, padx=5)
@@ -438,12 +549,11 @@ class SalaryMatchApp:
         }
 
     def ask_mode_a_config(self):
-        """模式A综合配置弹窗：一次性选择甲方和内部的文件、工作簿、表头行"""
+        """模式A综合配置弹窗：一次性选择甲方和内部的文件、工作簿、表头行、关键列"""
         dialog = tk.Toplevel(self.root)
         dialog.title("模式A：配置甲方与内部工资表")
-        dialog.geometry("850x650")
-        dialog.transient(self.root)
-        dialog.grab_set()
+        dialog.geometry("850x800")
+        _make_modal(dialog, self.root)
         dialog.resizable(False, False)
 
         ttk.Label(
@@ -452,13 +562,47 @@ class SalaryMatchApp:
             font=("Microsoft YaHei", 11),
         ).pack(pady=10)
 
+        # 关键列变量
+        jia_key_var = tk.StringVar()
+        nei_key_var = tk.StringVar()
+
+        def on_jia_headers(headers):
+            jia_key_combo["values"] = headers
+            self._auto_pick_key_field(jia_key_var, headers)
+
+        def on_nei_headers(headers):
+            nei_key_combo["values"] = headers
+            self._auto_pick_key_field(nei_key_var, headers)
+
         # 甲方配置区
-        jia = self._build_source_frame(dialog, "甲方工资表", dialog)
+        jia = self._build_source_frame(dialog, "甲方工资表", dialog, on_headers_changed=on_jia_headers)
         jia["frame"].pack(fill=tk.BOTH, expand=True, padx=15, pady=5)
 
         # 内部配置区
-        nei = self._build_source_frame(dialog, "内部工资表", dialog)
+        nei = self._build_source_frame(dialog, "内部工资表", dialog, on_headers_changed=on_nei_headers)
         nei["frame"].pack(fill=tk.BOTH, expand=True, padx=15, pady=5)
+
+        # 关键列选择区
+        key_frame = ttk.LabelFrame(dialog, text="关键列选择（用于行匹配，如\"姓名\"）", padding=10)
+        key_frame.pack(fill=tk.X, padx=15, pady=8)
+
+        kf1 = ttk.Frame(key_frame)
+        kf1.pack(fill=tk.X, pady=4)
+        ttk.Label(kf1, text="甲方关键列:", width=12).pack(side=tk.LEFT)
+        jia_key_combo = ttk.Combobox(
+            kf1, textvariable=jia_key_var, state="readonly",
+            width=30, font=("Microsoft YaHei", 10)
+        )
+        jia_key_combo.pack(side=tk.LEFT, padx=5)
+
+        kf2 = ttk.Frame(key_frame)
+        kf2.pack(fill=tk.X, pady=4)
+        ttk.Label(kf2, text="内部关键列:", width=12).pack(side=tk.LEFT)
+        nei_key_combo = ttk.Combobox(
+            kf2, textvariable=nei_key_var, state="readonly",
+            width=30, font=("Microsoft YaHei", 10)
+        )
+        nei_key_combo.pack(side=tk.LEFT, padx=5)
 
         result = [None]
 
@@ -469,6 +613,8 @@ class SalaryMatchApp:
             nei_file = nei["file_var"].get()
             nei_sheet = nei["sheet_var"].get()
             nei_header = nei["header_var"].get()
+            jia_key = jia_key_var.get()
+            nei_key = nei_key_var.get()
 
             if not jia_file:
                 messagebox.showwarning("提示", "请选择甲方工资表文件", parent=dialog)
@@ -482,8 +628,14 @@ class SalaryMatchApp:
             if not nei_sheet:
                 messagebox.showwarning("提示", "请选择内部工作簿", parent=dialog)
                 return
+            if not jia_key:
+                messagebox.showwarning("提示", "请选择甲方关键列", parent=dialog)
+                return
+            if not nei_key:
+                messagebox.showwarning("提示", "请选择内部关键列", parent=dialog)
+                return
 
-            result[0] = (jia_file, jia_sheet, jia_header, nei_file, nei_sheet, nei_header)
+            result[0] = (jia_file, jia_sheet, jia_header, nei_file, nei_sheet, nei_header, jia_key, nei_key)
             dialog.destroy()
 
         def on_cancel():
@@ -498,12 +650,11 @@ class SalaryMatchApp:
         return result[0]
 
     def ask_mode_b_config(self):
-        """模式B综合配置弹窗：一次性选择Excel文件和两个工作簿、表头行"""
+        """模式B综合配置弹窗：一次性选择Excel文件、两个工作簿、表头行、关键列"""
         dialog = tk.Toplevel(self.root)
         dialog.title("模式B：配置内部工作簿互相匹配")
-        dialog.geometry("850x530")
-        dialog.transient(self.root)
-        dialog.grab_set()
+        dialog.geometry("850x680")
+        _make_modal(dialog, self.root)
         dialog.resizable(False, False)
 
         ttk.Label(
@@ -525,9 +676,21 @@ class SalaryMatchApp:
         sheet_b_var = tk.StringVar()
         header_b_var = tk.IntVar(value=1)
 
+        # 关键列变量
+        key_a_var = tk.StringVar()
+        key_b_var = tk.StringVar()
+
+        def on_a_headers(headers):
+            key_a_combo["values"] = headers
+            self._auto_pick_key_field(key_a_var, headers)
+
+        def on_b_headers(headers):
+            key_b_combo["values"] = headers
+            self._auto_pick_key_field(key_b_var, headers)
+
         def _build_wb_section(parent, title, sheet_var_ref, header_var_ref):
             """构建固定高度的工作簿配置区域，返回 (外框frame, combo控件, header_frame)"""
-            outer = ttk.Frame(parent, height=195)
+            outer = ttk.Frame(parent, height=170)
             outer.pack(fill=tk.X, padx=15, pady=3)
             outer.pack_propagate(False)
 
@@ -549,48 +712,26 @@ class SalaryMatchApp:
 
             return outer, combo, header_frame
 
-        def _render_header_preview(header_frame, header_var_ref, path, sheet, dialog_parent):
-            """在指定header_frame中渲染表头预览"""
-            for widget in header_frame.winfo_children():
-                widget.destroy()
-
-            if not path or not sheet:
-                return
-            try:
-                preview = read_preview_rows(path, sheet, max_rows=3)
-            except Exception as e:
-                messagebox.showerror("错误", str(e), parent=dialog_parent)
-                return
-
-            if not preview:
-                return
-
-            ttk.Label(header_frame, text="表头行:").pack(anchor=tk.W)
-            header_var_ref.set(preview[0][0])
-
-            for row_idx, row_data in preview:
-                display_vals = []
-                for i, val in enumerate(row_data[:12]):
-                    if val is not None:
-                        display_vals.append(f"列{i + 1}:[{val}]")
-                display_text = "  ".join(display_vals) if display_vals else "(空行)"
-
-                rb_frame = ttk.Frame(header_frame)
-                rb_frame.pack(fill=tk.X, pady=1)
-                ttk.Radiobutton(
-                    rb_frame, text=f"第 {row_idx} 行", variable=header_var_ref, value=row_idx
-                ).pack(side=tk.LEFT)
-                ttk.Label(
-                    rb_frame, text=display_text, font=("Consolas", 9), foreground="gray"
-                ).pack(side=tk.LEFT, padx=8)
-
         # ========== 工作簿A ==========
         outer_a, combo_a, header_a_frame = _build_wb_section(
             dialog, "工作簿 A", sheet_a_var, header_a_var
         )
 
         def on_sheet_a_selected(*args):
-            _render_header_preview(header_a_frame, header_a_var, file_var.get(), sheet_a_var.get(), dialog)
+            path = file_var.get()
+            sheet = sheet_a_var.get()
+            if not path or not sheet:
+                on_a_headers([])
+                return
+            try:
+                preview = read_preview_rows(path, sheet, max_rows=3)
+            except Exception as e:
+                messagebox.showerror("错误", str(e), parent=dialog)
+                return
+            self._render_header_options(
+                header_a_frame, header_a_var, preview,
+                on_headers_changed=on_a_headers
+            )
 
         combo_a.bind("<<ComboboxSelected>>", on_sheet_a_selected)
 
@@ -600,7 +741,20 @@ class SalaryMatchApp:
         )
 
         def on_sheet_b_selected(*args):
-            _render_header_preview(header_b_frame, header_b_var, file_var.get(), sheet_b_var.get(), dialog)
+            path = file_var.get()
+            sheet = sheet_b_var.get()
+            if not path or not sheet:
+                on_b_headers([])
+                return
+            try:
+                preview = read_preview_rows(path, sheet, max_rows=3)
+            except Exception as e:
+                messagebox.showerror("错误", str(e), parent=dialog)
+                return
+            self._render_header_options(
+                header_b_frame, header_b_var, preview,
+                on_headers_changed=on_b_headers
+            )
 
         combo_b.bind("<<ComboboxSelected>>", on_sheet_b_selected)
 
@@ -633,12 +787,36 @@ class SalaryMatchApp:
                         widget.destroy()
                     for widget in header_b_frame.winfo_children():
                         widget.destroy()
+                    on_a_headers([])
+                    on_b_headers([])
 
         ttk.Button(file_frame, text="浏览...", command=on_browse, width=10).pack(side=tk.LEFT, padx=5)
 
-        # 按钮区域（紧跟工作簿区域，无大段空白）
+        # 关键列选择区
+        key_frame = ttk.LabelFrame(dialog, text="关键列选择（用于行匹配，如\"姓名\"）", padding=10)
+        key_frame.pack(fill=tk.X, padx=15, pady=8)
+
+        kf1 = ttk.Frame(key_frame)
+        kf1.pack(fill=tk.X, pady=4)
+        ttk.Label(kf1, text="工作簿A关键列:", width=14).pack(side=tk.LEFT)
+        key_a_combo = ttk.Combobox(
+            kf1, textvariable=key_a_var, state="readonly",
+            width=30, font=("Microsoft YaHei", 10)
+        )
+        key_a_combo.pack(side=tk.LEFT, padx=5)
+
+        kf2 = ttk.Frame(key_frame)
+        kf2.pack(fill=tk.X, pady=4)
+        ttk.Label(kf2, text="工作簿B关键列:", width=14).pack(side=tk.LEFT)
+        key_b_combo = ttk.Combobox(
+            kf2, textvariable=key_b_var, state="readonly",
+            width=30, font=("Microsoft YaHei", 10)
+        )
+        key_b_combo.pack(side=tk.LEFT, padx=5)
+
+        # 按钮区域
         btn_frame = ttk.Frame(dialog)
-        btn_frame.pack(pady=10)
+        btn_frame.pack(side=tk.BOTTOM, pady=10)
         result = [None]
 
         def on_ok():
@@ -647,6 +825,8 @@ class SalaryMatchApp:
             header_a = header_a_var.get()
             sheet_b = sheet_b_var.get()
             header_b = header_b_var.get()
+            key_a = key_a_var.get()
+            key_b = key_b_var.get()
 
             if not path:
                 messagebox.showwarning("提示", "请选择Excel文件", parent=dialog)
@@ -657,8 +837,14 @@ class SalaryMatchApp:
             if not sheet_b:
                 messagebox.showwarning("提示", "请选择工作簿B", parent=dialog)
                 return
+            if not key_a:
+                messagebox.showwarning("提示", "请选择工作簿A关键列", parent=dialog)
+                return
+            if not key_b:
+                messagebox.showwarning("提示", "请选择工作簿B关键列", parent=dialog)
+                return
 
-            result[0] = (path, sheet_a, header_a, sheet_b, header_b)
+            result[0] = (path, sheet_a, header_a, sheet_b, header_b, key_a, key_b)
             dialog.destroy()
 
         def on_cancel():
@@ -692,11 +878,12 @@ class SalaryMatchApp:
                         return
                     break
 
-                jia_file, jia_sheet, jia_header, nei_file, nei_sheet, nei_header = config
+                jia_file, jia_sheet, jia_header, nei_file, nei_sheet, nei_header, jia_key, nei_key = config
 
                 self.log(f"甲方文件：{jia_file}")
                 self.log(f"  工作簿：{jia_sheet}")
                 self.log(f"  表头行：第 {jia_header} 行")
+                self.log(f"  关键列：{jia_key}")
 
                 preview = read_preview_rows(jia_file, jia_sheet, max_rows=3)
                 jia_headers = []
@@ -711,6 +898,7 @@ class SalaryMatchApp:
                 self.log(f"内部文件：{nei_file}")
                 self.log(f"  工作簿：{nei_sheet}")
                 self.log(f"  表头行：第 {nei_header} 行")
+                self.log(f"  关键列：{nei_key}")
 
                 preview2 = read_preview_rows(nei_file, nei_sheet, max_rows=3)
                 nei_headers = []
@@ -737,33 +925,36 @@ class SalaryMatchApp:
                     break
 
                 self.log(f"字段映射：{field_mapping}")
+                self.log(f"关键列：甲方「{jia_key}」 ↔ 内部「{nei_key}」")
 
                 # 执行处理
                 self.log("正在对比...")
                 try:
-                    wb_out, compare_rows, diff_count = process_mode_a(
+                    wb_out, compare_rows, diff_count, unmatched_keys, total_info = process_mode_a(
                         jia_file,
                         jia_sheet,
                         jia_header,
                         nei_file,
                         nei_sheet,
                         nei_header,
+                        jia_key,
+                        nei_key,
                         field_mapping,
                         wb_out=wb_out,
                     )
                 except Exception as e:
-                    messagebox.showerror("处理错误", str(e))
+                    messagebox.showerror("处理错误", str(e), parent=self.root)
                     self.log(f"[错误] {e}")
                     break
 
-                self.log(
-                    f"对比完成：共对比 {compare_rows} 行数据，发现 {diff_count} 个差异单元格"
-                )
+                # 输出匹配结果日志
+                self._log_compare_result(total_info, compare_rows, diff_count, unmatched_keys)
+
                 self.log(f"已对工作簿【{nei_sheet}】应用标红")
 
                 # 询问是否继续
                 if not messagebox.askyesno(
-                    "继续匹配", "是否继续匹配下一对（甲方 vs 内部）？"
+                    "继续匹配", "是否继续匹配下一对（甲方 vs 内部）？", parent=self.root
                 ):
                     break
 
@@ -775,7 +966,7 @@ class SalaryMatchApp:
         except Exception as e:
             if wb_out is not None:
                 wb_out.close()
-            messagebox.showerror("错误", str(e))
+            messagebox.showerror("错误", str(e), parent=self.root)
             self.log(f"[错误] {e}")
 
     # -------------------- 模式 B --------------------
@@ -800,11 +991,11 @@ class SalaryMatchApp:
                         return
                     break
 
-                file_path, sheet_a, header_a, sheet_b, header_b = config
+                file_path, sheet_a, header_a, sheet_b, header_b, key_a, key_b = config
 
                 self.log(f"文件：{file_path}")
-                self.log(f"  工作簿 A：{sheet_a}，表头行：{header_a}")
-                self.log(f"  工作簿 B：{sheet_b}，表头行：{header_b}")
+                self.log(f"  工作簿 A：{sheet_a}，表头行：{header_a}，关键列：{key_a}")
+                self.log(f"  工作簿 B：{sheet_b}，表头行：{header_b}，关键列：{key_b}")
 
                 # 如果文件变更，保存上一轮
                 wb_out = self._check_and_save_previous(wb_out, current_file, file_path)
@@ -815,7 +1006,7 @@ class SalaryMatchApp:
                         wb_out = openpyxl.load_workbook(file_path)
                         current_file = file_path
                     except Exception as e:
-                        messagebox.showerror("错误", f"无法打开文件：{e}")
+                        messagebox.showerror("错误", f"无法打开文件：{e}", parent=self.root)
                         break
 
                 preview_a = read_preview_rows(file_path, sheet_a, max_rows=3)
@@ -848,26 +1039,28 @@ class SalaryMatchApp:
                     break
 
                 self.log(f"字段映射：{field_mapping}")
+                self.log(f"关键列：A「{key_a}」 ↔ B「{key_b}」")
                 self.log("正在对比...")
 
                 # 执行对比
                 try:
-                    highlight_cells, compare_rows, diff_count = process_mode_b_compare(
+                    highlight_cells, compare_rows, diff_count, unmatched_keys, total_info = process_mode_b_compare(
                         file_path,
                         sheet_a,
                         header_a,
                         sheet_b,
                         header_b,
+                        key_a,
+                        key_b,
                         field_mapping,
                     )
                 except Exception as e:
-                    messagebox.showerror("处理错误", str(e))
+                    messagebox.showerror("处理错误", str(e), parent=self.root)
                     self.log(f"[错误] {e}")
                     break
 
-                self.log(
-                    f"对比完成：共对比 {compare_rows} 行，发现 {diff_count} 个差异单元格"
-                )
+                # 输出匹配结果日志
+                self._log_compare_result(total_info, compare_rows, diff_count, unmatched_keys)
 
                 # 应用标红到 wb_out 的工作簿 B
                 apply_highlight_to_cells(wb_out, sheet_b, highlight_cells)
@@ -875,7 +1068,7 @@ class SalaryMatchApp:
 
                 # 询问是否继续
                 if not messagebox.askyesno(
-                    "继续匹配", "是否继续匹配另一对工作簿？"
+                    "继续匹配", "是否继续匹配另一对工作簿？", parent=self.root
                 ):
                     break
 
@@ -887,7 +1080,7 @@ class SalaryMatchApp:
         except Exception as e:
             if wb_out is not None:
                 wb_out.close()
-            messagebox.showerror("错误", str(e))
+            messagebox.showerror("错误", str(e), parent=self.root)
             self.log(f"[错误] {e}")
 
 

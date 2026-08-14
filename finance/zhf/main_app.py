@@ -4,7 +4,7 @@
 """
 绩效考核处理工具 - 主界面
 左侧导航栏 + Frame切换 方案
-整合：数据匹配、稳岗率计算、合并表格 三大功能
+整合：数据匹配、稳岗率计算、合并表格、在职月份计算 四大功能
 """
 
 import tkinter as tk
@@ -58,6 +58,7 @@ class MainApp:
             {"key": "sjpp", "text": "📊 数据匹配", "desc": "完整版表格自动生成"},
             {"key": "wgl", "text": "📈 稳岗率计算", "desc": "驻场&项目经理分析"},
             {"key": "hbbg", "text": "📋 合并表格", "desc": "多Excel文件合并"},
+            {"key": "tenure", "text": "📅 在职月份计算", "desc": "员工在职月份/天数统计"},
         ]
 
         btn_container = tk.Frame(nav_frame, bg="#2c3e50")
@@ -141,7 +142,8 @@ class MainApp:
         status_texts = {
             "sjpp": "数据匹配 - 从原始表自动生成完整版表格",
             "wgl": "稳岗率计算 - 分析项目驻场和项目经理的稳岗率",
-            "hbbg": "合并表格 - 将多个Excel文件合并到汇总表"
+            "hbbg": "合并表格 - 将多个Excel文件合并到汇总表",
+            "tenure": "在职月份计算 - 统计员工在职月份和天数"
         }
         self.status_var.set(status_texts.get(frame_key, ""))
 
@@ -156,6 +158,11 @@ class MainApp:
         elif frame_key == "hbbg":
             from .hbbg_zhf import MergerFrame
             return MergerFrame(self.content_frame, self.status_var)
+        elif frame_key == "tenure":
+            from .tenure_gui import App as TenureApp
+            container = tk.Frame(self.content_frame, bg="white")
+            TenureApp(container, status_var=self.status_var)
+            return container
         else:
             raise ValueError(f"未知的Frame类型: {frame_key}")
 

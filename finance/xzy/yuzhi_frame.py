@@ -5,19 +5,25 @@
 
 import os
 import pandas as pd
+import tempfile
 from openpyxl import load_workbook, Workbook
-from openpyxl.styles import PatternFill
+from openpyxl.styles import PatternFill, Font, Border, Side
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import queue
 import threading
+import shutil
 
 
 class YuzhiCore:
     """预支处理核心逻辑（纯计算，无GUI依赖）"""
 
-    def __init__(self, input_file, output_file):
+    def __init__(self, input_file, output_file=None):
         self.input_file = input_file
+        if output_file is None:
+            # 未指定输出文件时，生成系统临时文件，最终由 GUI 层另存到用户指定位置
+            fd, output_file = tempfile.mkstemp(suffix='.xlsx', prefix='yuzhi_')
+            os.close(fd)
         self.output_file = output_file
 
     def process(self, progress_callback=None):
@@ -69,6 +75,28 @@ class YuzhiCore:
 
         mask6 = df[col_name['C']].astype(str).str.contains('中世', na=False)
         df.loc[mask6, col_name['E']] = 0
+
+        # ============ 新增规则 2.1：运营中心 = 温州长江汽车电子 ============
+        # 民生银行不扣手续费；其余银行统一扣 5 元
+        mask_wz_cj = df[col_name['C']].astype(str).str.contains('温州长江汽车电子', na=False)
+        mask_wz_cj_cmb = mask_wz_cj & df[col_name['H']].astype(str).str.contains('民生银行', na=False)
+        df.loc[mask_wz_cj_cmb, col_name['E']] = 0
+        mask_wz_cj_other = mask_wz_cj & ~df[col_name['H']].astype(str).str.contains('民生银行', na=False)
+        df.loc[mask_wz_cj_other, col_name['E']] = 5
+
+        # ============ 新增规则 2.2：运营中心 = 中铭工程 ============
+        # 招商银行 / 驻厂 / 垫付 不扣手续费
+        # 预支金额 ≤ 1000 扣 10 元；> 1000 按 1% 扣（其余银行且不满足免扣条件时）
+        mask_zm = df[col_name['C']].astype(str).str.contains('中铭工程', na=False)
+        mask_zm_cmb = mask_zm & df[col_name['H']].astype(str).str.contains('招商银行', na=False)
+        df.loc[mask_zm_cmb, col_name['E']] = 0
+        mask_zm_df = mask_zm & df[col_name['I']].astype(str).str.contains('垫付', na=False)
+        df.loc[mask_zm_df, col_name['E']] = 0
+        # 计费规则仅作用于 E 列仍为空的行（即未命中免扣条件）
+        mask_zm_le_1000 = mask_zm & (df[col_name['D']] <= 1000) & df[col_name['E']].isna()
+        df.loc[mask_zm_le_1000, col_name['E']] = 10
+        mask_zm_gt_1000 = mask_zm & (df[col_name['D']] > 1000) & df[col_name['E']].isna()
+        df.loc[mask_zm_gt_1000, col_name['E']] = df.loc[mask_zm_gt_1000, col_name['D']] * 0.01
 
         if progress_callback:
             progress_callback(35, "正在计算 E 列数值...")
@@ -161,8 +189,22 @@ class YuzhiCore:
         duplicate_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
 
         total_sheets = len(wb.sheetnames)
+        # 用于清除表头加粗/边框的样式
+        normal_font = Font(bold=False)
+        no_border = Border(
+            left=Side(style='none'),
+            right=Side(style='none'),
+            top=Side(style='none'),
+            bottom=Side(style='none')
+        )
         for sheet_idx, sheet_name in enumerate(wb.sheetnames):
             ws = wb[sheet_name]
+
+            # ★ 清除表头行（第1行）的加粗和边框样式
+            for col in range(1, ws.max_column + 1):
+                cell = ws.cell(row=1, column=col)
+                cell.font = normal_font
+                cell.border = no_border
 
             # 找到 C 列最后一个有内容的行，添加合计行
             last_row = ws.max_row
@@ -190,6 +232,7 @@ class YuzhiCore:
 
                 c_val = ws[f'C{row}'].value
                 h_val = ws[f'H{row}'].value
+                i_val = ws[f'I{row}'].value
                 if c_val and '伟明' in str(c_val) and h_val and '中信银行' in str(h_val):
                     for col in ['D', 'E', 'F', 'G', 'H']:
                         ws[f'{col}{row}'].fill = yellow_fill
@@ -201,6 +244,19 @@ class YuzhiCore:
 
                 if c_val and '中世' in str(c_val):
                     for col in ['D', 'E', 'F', 'G', 'H']:
+                        ws[f'{col}{row}'].fill = yellow_fill
+
+                # ★ 新增：温州长江汽车电子 + 民生银行（规则 2.1 免扣）
+                if c_val and '温州长江汽车电子' in str(c_val) and h_val and '民生银行' in str(h_val):
+                    for col in ['D', 'E', 'F', 'G', 'H']:
+                        ws[f'{col}{row}'].fill = yellow_fill
+
+                # ★ 新增：中铭工程 免扣条件（规则 2.2）
+                if c_val and '中铭工程' in str(c_val) and h_val and '招商银行' in str(h_val):
+                    for col in ['D', 'E', 'F', 'G', 'H']:
+                        ws[f'{col}{row}'].fill = yellow_fill
+                if c_val and '中铭工程' in str(c_val) and i_val and '垫付' in str(i_val):
+                    for col in ['D', 'E', 'F', 'G', 'H', 'I']:
                         ws[f'{col}{row}'].fill = yellow_fill
 
             # 标记 J 列和 K 列的重复值
@@ -335,26 +391,13 @@ class YuzhiFrame(ttk.Frame):
         # 输入文件选择
         row_in = ttk.Frame(file_frame)
         row_in.pack(fill=tk.X, pady=5)
-        ttk.Label(row_in, text="输入文件：", font=("Microsoft YaHei", 10),
-                  width=12).pack(side=tk.LEFT)
+        ttk.Label(row_in, text='选择"工人预支申请"表：', font=("Microsoft YaHei", 10)).pack(side=tk.LEFT)
         self.lbl_input = ttk.Label(row_in, text="未选择", font=("Microsoft YaHei", 9),
                                     foreground="gray")
         self.lbl_input.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         self.btn_select_input = ttk.Button(row_in, text="选择", command=self.select_input_file, width=8)
         self.btn_select_input.pack(side=tk.RIGHT)
         self.input_file_path = None
-
-        # 输出文件选择
-        row_out = ttk.Frame(file_frame)
-        row_out.pack(fill=tk.X, pady=5)
-        ttk.Label(row_out, text="输出文件：", font=("Microsoft YaHei", 10),
-                  width=12).pack(side=tk.LEFT)
-        self.lbl_output = ttk.Label(row_out, text="未设置", font=("Microsoft YaHei", 9),
-                                     foreground="gray")
-        self.lbl_output.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        self.btn_select_output = ttk.Button(row_out, text="选择", command=self.select_output_file, width=8)
-        self.btn_select_output.pack(side=tk.RIGHT)
-        self.output_file_path = None
 
         # 处理按钮
         btn_area = ttk.Frame(main_frame)
@@ -376,7 +419,7 @@ class YuzhiFrame(ttk.Frame):
         self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
 
-        self.log("就绪。请选择输入和输出文件后点击'开始处理'")
+        self.log("就绪。请选择输入文件后点击'开始处理'")
 
     def log(self, msg):
         self.log_text.insert(tk.END, msg + "\n")
@@ -396,24 +439,8 @@ class YuzhiFrame(ttk.Frame):
         self.log(f"已选择输入文件：{filepath}")
         self._check_ready()
 
-    def select_output_file(self):
-        desktop_path = os.path.join(os.environ.get("USERPROFILE", ""), "Desktop")
-        filepath = filedialog.asksaveasfilename(
-            title="选择输出保存位置",
-            defaultextension=".xlsx",
-            filetypes=[("Excel 文件", "*.xlsx"), ("所有文件", "*.*")],
-            initialdir=desktop_path
-        )
-        if not filepath:
-            return
-        self.output_file_path = filepath
-        filename = filepath.split("/")[-1].split("\\")[-1]
-        self.lbl_output.config(text=filename, foreground="black")
-        self.log(f"已设置输出文件：{filepath}")
-        self._check_ready()
-
     def _check_ready(self):
-        if self.input_file_path and self.output_file_path:
+        if self.input_file_path:
             self.btn_process.config(state=tk.NORMAL)
         else:
             self.btn_process.config(state=tk.DISABLED)
@@ -453,7 +480,7 @@ class YuzhiFrame(ttk.Frame):
         q = queue.Queue()
 
         # 结果容器
-        result_container = {'error': None}
+        result_container = {'error': None, 'output_file': None}
 
         def update_from_queue():
             try:
@@ -473,11 +500,44 @@ class YuzhiFrame(ttk.Frame):
             finally:
                 progress_window.after(100, update_from_queue)
 
+        def _cleanup_temp(path):
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+
         def finish_success(window):
             window.destroy()
-            messagebox.showinfo("完成", "处理完成，文件已保存！")
-            self.btn_process.config(state=tk.NORMAL)
-            self.app.status_label.config(text="手续费预支处理 - 完成")
+            # 处理完成，弹出保存对话框让用户自行选择保存位置
+            desktop_path = os.path.join(os.environ.get("USERPROFILE", ""), "Desktop")
+            save_path = filedialog.asksaveasfilename(
+                title="选择保存位置",
+                defaultextension=".xlsx",
+                filetypes=[("Excel 文件", "*.xlsx"), ("所有文件", "*.*")],
+                initialdir=desktop_path,
+                initialfile="预支处理结果.xlsx"
+            )
+            if not save_path:
+                # 用户取消保存，清理临时文件
+                _cleanup_temp(result_container.get('output_file'))
+                messagebox.showinfo("已取消", "未选择保存位置，处理结果已丢弃")
+                self.btn_process.config(state=tk.NORMAL)
+                self.app.status_label.config(text="手续费预支处理 - 已取消")
+                return
+            try:
+                shutil.copy2(result_container['output_file'], save_path)
+                _cleanup_temp(result_container.get('output_file'))
+                messagebox.showinfo("完成", f"文件已保存到：\n{save_path}")
+                self.btn_process.config(state=tk.NORMAL)
+                self.app.status_label.config(text="手续费预支处理 - 完成")
+            except Exception as e:
+                import traceback
+                err = f"保存文件失败：{str(e)}\n{traceback.format_exc()}"
+                self.log(f"[错误] {err}")
+                messagebox.showerror("保存失败", str(e))
+                self.btn_process.config(state=tk.NORMAL)
+                self.app.status_label.config(text="手续费预支处理 - 保存失败")
 
         def finish_error(window, error_msg):
             window.destroy()
@@ -485,12 +545,13 @@ class YuzhiFrame(ttk.Frame):
             self.btn_process.config(state=tk.NORMAL)
             self.app.status_label.config(text="手续费预支处理 - 出错")
             self.log(f"[错误] {error_msg}")
-
+    
         # 后台处理函数
         def process_thread():
             try:
-                core = YuzhiCore(self.input_file_path, self.output_file_path)
+                core = YuzhiCore(self.input_file_path)
                 core.process(lambda pct, msg: q.put((pct, msg)))
+                result_container['output_file'] = core.output_file
             except Exception as e:
                 import traceback
                 err = f"处理出错：{str(e)}\n{traceback.format_exc()}"

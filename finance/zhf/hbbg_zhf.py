@@ -18,6 +18,7 @@ import traceback
 
 from .hbbg_process import ProcessMergeEngine
 from .hbbg_generic import GenericMergeEngine
+from .hbbg_custom_merge import CustomMergeEngine
 from .hbbg_column_move import ColumnMovePanel
 
 
@@ -28,7 +29,7 @@ class MergerFrame(tk.Frame):
         super().__init__(parent)
         self.parent = parent
         self.status_var = status_var
-        self._mode = "process"  # "process" 或 "generic"
+        self._mode = "process"  # "process" / "generic" / "custom"
 
         # 共用变量
         self.selected_files = []
@@ -43,6 +44,11 @@ class MergerFrame(tk.Frame):
         self.header_file_var = tk.StringVar(value="")
         self.skip_header_var = tk.StringVar(value="1")
 
+        # 自定义合并（多表合并：删列+公司命名）模式变量
+        self.custom_del_col_var = tk.StringVar(value="")
+        self.custom_sheet_name_col_var = tk.StringVar(value="")
+        self.custom_header_var = tk.StringVar(value="5")
+
         # ---- 创建核心引擎（无 GUI 依赖）----
         self.process_engine = ProcessMergeEngine(
             target_col_letter=self.target_col_var.get(),
@@ -50,6 +56,7 @@ class MergerFrame(tk.Frame):
         self.generic_engine = GenericMergeEngine(
             gap_rows=0,
         )
+        self.custom_engine = CustomMergeEngine()
 
         # 构建界面
         self._build_ui()
@@ -100,6 +107,12 @@ class MergerFrame(tk.Frame):
             command=self._on_mode_change
         ).pack(side=tk.LEFT, padx=4)
 
+        ttk.Radiobutton(
+            mode_frame, text="多表合并（删列+公司命名）",
+            variable=self.mode_var, value="custom",
+            command=self._on_mode_change
+        ).pack(side=tk.LEFT, padx=4)
+
         # ----- 文件选择区（只保留按钮行 + 处理模式选项）-----
         select_frame = ttk.LabelFrame(top_area, text="文件选择", padding=12)
         select_frame.grid(row=1, column=0, sticky="ew")
@@ -138,6 +151,93 @@ class MergerFrame(tk.Frame):
         generic_options_frame.grid(row=2, column=0, sticky="ew", pady=(8, 0))
         generic_options_frame.columnconfigure(0, weight=1)
         self._generic_options_frame = generic_options_frame
+
+        # ================================================================
+        #  Row 2(并列): 自定义合并选项区（多表合并：删列+公司命名）
+        # ================================================================
+        custom_frame = ttk.LabelFrame(main, text="多表合并（删列+公司命名）选项", padding=10)
+        custom_frame.grid(row=2, column=0, sticky="nsew", pady=(8, 0))
+        custom_frame.columnconfigure(0, weight=1)
+        self._custom_options_frame = custom_frame
+        custom_frame.grid_remove()  # 初始隐藏
+
+        # ----- 工作表选择 Treeview（按文件分组，可多选）-----
+        sheet_tree_lf = ttk.LabelFrame(custom_frame, text="选择工作表（按文件分组，可多选）", padding=8)
+        sheet_tree_lf.pack(fill=tk.X, pady=(0, 8))
+
+        tree_container = ttk.Frame(sheet_tree_lf)
+        tree_container.pack(fill=tk.BOTH, expand=True)
+        tree_container.rowconfigure(0, weight=1)
+        tree_container.columnconfigure(0, weight=1)
+
+        tree_scroll_y = tk.Scrollbar(tree_container)
+        tree_scroll_y.grid(row=0, column=1, sticky="ns")
+        tree_scroll_x = tk.Scrollbar(tree_container, orient=tk.HORIZONTAL)
+        tree_scroll_x.grid(row=1, column=0, sticky="ew")
+
+        self._sheet_tree = ttk.Treeview(
+            tree_container, columns=("check",), show="tree headings", height=9,
+            yscrollcommand=tree_scroll_y.set, xscrollcommand=tree_scroll_x.set
+        )
+        self._sheet_tree.heading("#0", text="文件 / 工作表")
+        self._sheet_tree.heading("check", text="选择")
+        self._sheet_tree.column("#0", width=360, anchor="w")
+        self._sheet_tree.column("check", width=48, anchor="center")
+        self._sheet_tree.grid(row=0, column=0, sticky="nsew")
+        tree_scroll_y.config(command=self._sheet_tree.yview)
+        tree_scroll_x.config(command=self._sheet_tree.xview)
+        self._sheet_tree.bind("<Button-1>", self._on_tree_click)
+
+        # 全选 / 清空 按钮
+        tree_btn_row = ttk.Frame(sheet_tree_lf)
+        tree_btn_row.pack(fill=tk.X, pady=(4, 0))
+        tk.Button(tree_btn_row, text="☑ 全选全部", command=self._tree_select_all,
+                  font=('微软雅黑', 9), bg="#E3F2FD", fg="#1565C0",
+                  cursor="hand2", relief="flat").pack(side=tk.LEFT, padx=(0, 6))
+        tk.Button(tree_btn_row, text="☐ 清空选择", command=self._tree_clear,
+                  font=('微软雅黑', 9), bg="#FFEBEE", fg="#C62828",
+                  cursor="hand2", relief="flat").pack(side=tk.LEFT)
+
+        # 状态字典（供勾选逻辑使用）
+        self._sheet_item_state = {}   # iid -> bool
+        self._sheet_item_map = {}     # child iid -> (file_path, sheet_name)
+        self._sheet_parent_map = {}   # parent iid -> file_path
+
+        # ----- 删除起始列 -----
+        del_row = ttk.Frame(custom_frame)
+        del_row.pack(fill=tk.X, pady=(0, 6))
+        ttk.Label(del_row, text="删除起始列（含该列及之后，如 AT）：",
+                  font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=(0, 6))
+        self.custom_del_col_entry = ttk.Entry(
+            del_row, textvariable=self.custom_del_col_var, font=('微软雅黑', 11), width=10)
+        self.custom_del_col_entry.pack(side=tk.LEFT)
+        ttk.Label(del_row, text="（所有勾选工作表统一删除该列及之后的数据）",
+                  font=('微软雅黑', 9), foreground="#888888").pack(side=tk.LEFT, padx=(6, 0))
+
+        # ----- 公司命名列 -----
+        sheet_name_row_frame = ttk.Frame(custom_frame)
+        sheet_name_row_frame.pack(fill=tk.X, pady=(0, 6))
+        ttk.Label(sheet_name_row_frame, text="公司命名列（如 AR）：",
+                  font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=(0, 6))
+        self.custom_sheet_name_col_entry = ttk.Entry(
+            sheet_name_row_frame, textvariable=self.custom_sheet_name_col_var,
+            font=('微软雅黑', 11), width=8)
+        self.custom_sheet_name_col_entry.pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(sheet_name_row_frame,
+                  text="（每个工作表的所有数据行在该列写入工作表名，如「台州分公司」）",
+                  font=('微软雅黑', 9), foreground="#888888").pack(side=tk.LEFT)
+
+        # ----- 表头行数 -----
+        hdr_row_frame = ttk.Frame(custom_frame)
+        hdr_row_frame.pack(fill=tk.X, pady=(0, 6))
+        ttk.Label(hdr_row_frame, text="表头行数：",
+                  font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=(0, 6))
+        self.custom_header_spin = tk.Spinbox(
+            hdr_row_frame, textvariable=self.custom_header_var,
+            from_=1, to=50, width=6, font=('微软雅黑', 11))
+        self.custom_header_spin.pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(hdr_row_frame, text="（第一个工作表保留表头，其余跳过相同行数，中间不留空行）",
+                  font=('微软雅黑', 9), foreground="#888888").pack(side=tk.LEFT)
 
         # 文件间空行数
         self._generic_opt_frame = ttk.Frame(generic_options_frame)
@@ -180,6 +280,7 @@ class MergerFrame(tk.Frame):
         list_frame.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
         list_frame.rowconfigure(0, weight=1)
         list_frame.columnconfigure(0, weight=1)
+        self._file_list_frame = list_frame
 
         scrollbar_y = tk.Scrollbar(list_frame)
         scrollbar_y.grid(row=0, column=1, sticky="ns")
@@ -249,13 +350,17 @@ class MergerFrame(tk.Frame):
         if mode == "process":
             self._process_opt_frame.pack(fill=tk.X, pady=(8, 0))
             self._generic_options_frame.grid_remove()
+            self._custom_options_frame.grid_remove()
+            self._file_list_frame.grid()
             self.merge_btn.config(text="▶ 开始处理并合并")
             self.note_frame.grid()
             self._update_note_text()
             self.after(100, lambda: self.winfo_toplevel().geometry("900x850"))
-        else:
+        elif mode == "generic":
             self._process_opt_frame.pack_forget()
             self._generic_options_frame.grid()
+            self._custom_options_frame.grid_remove()
+            self._file_list_frame.grid()
             self._generic_opt_frame.pack(fill=tk.X, pady=(6, 0))
             self._generic_header_row.pack(fill=tk.X, pady=6)
             self._generic_skip_row.pack(fill=tk.X, pady=6)
@@ -263,6 +368,16 @@ class MergerFrame(tk.Frame):
             self.merge_btn.config(text="▶ 开始合并")
             self.note_frame.grid_remove()
             self.after(100, lambda: self.winfo_toplevel().geometry("900x850"))
+        else:  # custom —— 多表合并（删列+公司命名）
+            self._process_opt_frame.pack_forget()
+            self._generic_options_frame.grid_remove()
+            self._custom_options_frame.grid()
+            self._file_list_frame.grid_remove()
+            self.merge_btn.config(text="▶ 开始自定义合并")
+            self.note_frame.grid()
+            self._update_note_text()
+            self._refresh_sheet_tree()
+            self.after(100, lambda: self.winfo_toplevel().geometry("980x940"))
 
     def _auto_resize_window(self):
         """布局完成后自动调整顶层窗口大小"""
@@ -292,6 +407,17 @@ class MergerFrame(tk.Frame):
                 "4）处理过程中会保留原文件的格式（字体、边框、合并单元格等）"
             )
             ttk.Label(self.note_frame, text=text, justify="left", foreground='#666666').pack(anchor="w")
+        elif self._mode == "custom":
+            text = (
+                "【多表合并（删列+公司命名）】\n"
+                "1）点击'选择Excel文件'上传文件，再在上方树中勾选需要合并的工作表（按文件分组，可多选）\n"
+                "2）填写'删除起始列'（如 AT）：所有勾选工作表将删除该列及之后的数据\n"
+                "3）填写'公司命名列'（如 AR）：每张工作表的所有数据行在该列写入工作表名（用于追溯行来源）\n"
+                "4）填写'表头行数'（如 5）：第一个工作表保留表头，其余工作表跳过相同行数\n"
+                "5）点击'开始自定义合并'：在同目录生成独立文件「汇总表.xlsx」\n"
+                "   （仅保留第一个工作表的表头格式；源文件不会被修改）"
+            )
+            ttk.Label(self.note_frame, text=text, justify="left", foreground='#666666').pack(anchor="w")
 
     # ============================================================
     #  文件选择（两种模式共用）
@@ -319,6 +445,9 @@ class MergerFrame(tk.Frame):
                 self.header_combo.config(state="readonly")
             if hasattr(self, 'col_move_panel'):
                 self.col_move_panel.set_available_files(self.selected_files)
+            # 自定义模式：刷新工作表选择树
+            if self._mode == "custom":
+                self._refresh_sheet_tree()
 
     def clear_files(self):
         self.selected_files = []
@@ -328,6 +457,17 @@ class MergerFrame(tk.Frame):
         self.file_count_label.config(text="已选择 0 个文件")
         self.progress_status.config(text="请选择需要合并的Excel文件")
         self.progress['value'] = 0
+
+        # 自定义合并模式变量复位
+        self.custom_del_col_var.set("")
+        self.custom_sheet_name_col_var.set("")
+        self.custom_header_var.set("5")
+        if hasattr(self, '_sheet_tree'):
+            for iid in self._sheet_tree.get_children():
+                self._sheet_tree.delete(iid)
+            self._sheet_item_state.clear()
+            self._sheet_item_map.clear()
+            self._sheet_parent_map.clear()
 
         if hasattr(self, 'header_file_var'):
             self.header_file_var.set("")
@@ -360,8 +500,10 @@ class MergerFrame(tk.Frame):
     def _on_merge_click(self):
         if self._mode == "process":
             self._do_process_merge()
-        else:
+        elif self._mode == "generic":
             self._do_generic_merge()
+        else:
+            self._do_custom_merge()
 
     # ============================================================
     #  处理模式（编排层）
@@ -565,6 +707,183 @@ class MergerFrame(tk.Frame):
         except Exception as e:
             traceback.print_exc()
             messagebox.showerror("错误", f"合并过程中出现错误：\n{str(e)}", parent=self.winfo_toplevel())
+        finally:
+            self.merge_btn.config(state=tk.NORMAL)
+
+    # ============================================================
+    #  自定义合并模式（多表合并：删列+公司命名）
+    # ============================================================
+
+    def _refresh_sheet_tree(self):
+        """根据已选文件重建工作表选择树（按文件分组）"""
+        for iid in self._sheet_tree.get_children():
+            self._sheet_tree.delete(iid)
+        self._sheet_item_state.clear()
+        self._sheet_item_map.clear()
+        self._sheet_parent_map.clear()
+
+        for file_path in self.selected_files:
+            parent_iid = self._sheet_tree.insert(
+                "", "end", text=os.path.basename(file_path), values=("☐",), open=True)
+            self._sheet_parent_map[parent_iid] = file_path
+            for sheet_name, is_hidden in CustomMergeEngine.list_sheets(file_path):
+                label = sheet_name + ("（隐藏）" if is_hidden else "")
+                child_iid = self._sheet_tree.insert(
+                    parent_iid, "end", text=label, values=("☐",))
+                self._sheet_item_state[child_iid] = False
+                self._sheet_item_map[child_iid] = (file_path, sheet_name)
+
+    def _on_tree_click(self, event):
+        """点击「选择」列时切换勾选状态"""
+        col = self._sheet_tree.identify("column", event.x, event.y)
+        region = self._sheet_tree.identify("region", event.x, event.y)
+        item = self._sheet_tree.identify("item", event.x, event.y)
+        if not item or region == "heading":
+            return
+        if col != "#1":  # 仅点击「选择」列时切换
+            return
+        self._toggle_tree_item(item)
+
+    def _toggle_tree_item(self, iid):
+        """切换某个树节点的勾选状态（父节点=全选/全不选其下子节点）"""
+        children = self._sheet_tree.get_children(iid)
+        if children:  # 父节点（文件）
+            all_checked = all(self._sheet_item_state.get(c, False) for c in children)
+            new_state = not all_checked
+            for c in children:
+                self._sheet_item_state[c] = new_state
+                self._sheet_tree.set(c, "check", "☑" if new_state else "☐")
+            self._sheet_item_state[iid] = new_state
+            self._sheet_tree.set(iid, "check", "☑" if new_state else "☐")
+        else:  # 子节点（工作表）
+            new_state = not self._sheet_item_state.get(iid, False)
+            self._sheet_item_state[iid] = new_state
+            self._sheet_tree.set(iid, "check", "☑" if new_state else "☐")
+            parent = self._sheet_tree.parent(iid)
+            if parent:
+                sibs = self._sheet_tree.get_children(parent)
+                all_checked = all(self._sheet_item_state.get(s, False) for s in sibs)
+                self._sheet_item_state[parent] = all_checked
+                self._sheet_tree.set(parent, "check", "☑" if all_checked else "☐")
+
+    def _tree_select_all(self):
+        """勾选所有工作表"""
+        for parent_iid in self._sheet_tree.get_children():
+            for child_iid in self._sheet_tree.get_children(parent_iid):
+                self._sheet_item_state[child_iid] = True
+                self._sheet_tree.set(child_iid, "check", "☑")
+            self._sheet_item_state[parent_iid] = True
+            self._sheet_tree.set(parent_iid, "check", "☑")
+
+    def _tree_clear(self):
+        """清空所有勾选"""
+        for parent_iid in self._sheet_tree.get_children():
+            for child_iid in self._sheet_tree.get_children(parent_iid):
+                self._sheet_item_state[child_iid] = False
+                self._sheet_tree.set(child_iid, "check", "☐")
+            self._sheet_item_state[parent_iid] = False
+            self._sheet_tree.set(parent_iid, "check", "☐")
+
+    def _get_custom_selections(self):
+        """
+        按「文件顺序 + sheet tab 顺序」收集被勾选的工作表。
+        返回: List[Tuple[file_path, sheet_name]]（即方案 B 的第一个工作表顺序）
+        """
+        selections = []
+        for parent_iid in self._sheet_tree.get_children():
+            for child_iid in self._sheet_tree.get_children(parent_iid):
+                if self._sheet_item_state.get(child_iid, False):
+                    selections.append(self._sheet_item_map[child_iid])
+        return selections
+
+    def _do_custom_merge(self):
+        """自定义合并编排：校验 → 引擎执行 → 写回第一个文件"""
+        if not self.selected_files:
+            messagebox.showwarning("提示", "请先选择Excel文件！", parent=self.winfo_toplevel())
+            return
+
+        selections = self._get_custom_selections()
+        if not selections:
+            messagebox.showwarning("提示", "请至少勾选一个工作表！", parent=self.winfo_toplevel())
+            return
+
+        delete_col = self.custom_del_col_var.get().strip().upper()
+        if not delete_col or not delete_col.isalpha():
+            messagebox.showwarning("提示", "请填写有效的删除起始列字母（如 AT）！", parent=self.winfo_toplevel())
+            return
+
+        sheet_name_col = self.custom_sheet_name_col_var.get().strip().upper()
+        if not sheet_name_col or not sheet_name_col.isalpha():
+            messagebox.showwarning("提示", "请填写有效的公司命名列字母（如 AR）！", parent=self.winfo_toplevel())
+            return
+
+        try:
+            header_rows = int(self.custom_header_var.get())
+        except ValueError:
+            header_rows = 5
+        if header_rows < 1:
+            messagebox.showwarning("提示", "表头行数必须 ≥ 1！", parent=self.winfo_toplevel())
+            return
+
+        # 公司命名列位于删除列范围内 → 提前给提示
+        try:
+            start_col_idx = CustomMergeEngine.col_letter_to_index(delete_col)
+            sheet_name_col_idx = CustomMergeEngine.col_letter_to_index(sheet_name_col)
+            if sheet_name_col_idx >= start_col_idx:
+                ans = messagebox.askyesno(
+                    "提示",
+                    f"公司命名列 {sheet_name_col} 位于删除列 {delete_col} 及之后，\n"
+                    f"公司命名将被删除（删除优先于命名）。是否继续？",
+                    parent=self.winfo_toplevel())
+                if not ans:
+                    return
+        except Exception:
+            pass
+
+        first_file_path = selections[0][0]
+
+        ans = messagebox.askyesno(
+            "确认",
+            f"将在目录：\n{os.path.dirname(first_file_path)}\n中生成独立文件「汇总表.xlsx」，是否继续？\n\n"
+            f"（仅保留第一个工作表的表头格式；源文件不会被修改；若已存在「汇总表.xlsx」将被覆盖）",
+            parent=self.winfo_toplevel())
+        if not ans:
+            return
+
+        self.merge_btn.config(state=tk.DISABLED)
+        self.progress['value'] = 0
+
+        try:
+            def progress_cb(pct, text):
+                self.progress['value'] = pct
+                self.progress_status.config(text=text)
+                self.update_idletasks()
+
+            def status_cb(text):
+                if self.status_var:
+                    self.status_var.set(text)
+
+            self.custom_engine._progress_cb = progress_cb
+            self.custom_engine._status_cb = status_cb
+
+            result = self.custom_engine.run(
+                selections, first_file_path, delete_col, sheet_name_col, header_rows
+            )
+            self.progress['value'] = 100
+
+            if result.get("status") == "success":
+                self.last_output_path = result["output_path"]
+                self.open_dir_btn.config(state=tk.NORMAL)
+                self.progress_status.config(text="完成！汇总表已生成")
+                messagebox.showinfo("完成", result.get("summary", ""), parent=self.winfo_toplevel())
+            else:
+                self.progress_status.config(text="处理失败")
+                messagebox.showerror("错误", result.get("message", "未知错误"), parent=self.winfo_toplevel())
+
+        except Exception as e:
+            traceback.print_exc()
+            messagebox.showerror("错误", f"处理过程中出现错误：\n{str(e)}", parent=self.winfo_toplevel())
+            self.progress_status.config(text="处理失败")
         finally:
             self.merge_btn.config(state=tk.NORMAL)
 

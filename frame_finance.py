@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-财务功能模块 - 8个功能
+财务功能模块 - 9个功能
 使用CustomTkinter实现的现代化UI
 1. 财务_收支记账_筛选
 2. 供应商_合并表格
@@ -32,6 +32,8 @@ from finance.pmh.yzpz_gui import ExcelProcessorGUI
 from finance.cxm.hs_huizong_cxm_main import SummaryProcessorApp
 from finance.cw_yhls_zyxg import process_excel as process_yhls
 from finance.pl_cf_pizhu import CommentToolApp
+from finance.hbgs_gui import HbgsApp
+from ui_components import FunctionCard, Theme
 
 
 class FinanceFrame(ctk.CTkFrame):
@@ -40,150 +42,106 @@ class FinanceFrame(ctk.CTkFrame):
     def __init__(self, parent, status_var=None):
         super().__init__(parent, fg_color="white", corner_radius=0)
         self.status_var = status_var or tk.StringVar()
+        self._cards = []
         self._build_ui()
 
     def _build_ui(self):
         """构建UI"""
-        # 标题区
+        # ---- 标题区 ----
         title_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
-        title_frame.pack(fill="x", padx=30, pady=(25, 15))
+        title_frame.pack(fill="x", padx=Theme.SPACING_XL, pady=(Theme.SPACING_LG, Theme.SPACING_MD))
 
-        title_label = ctk.CTkLabel(
+        ctk.CTkLabel(
             title_frame,
             text="💰 财务工具",
-            font=("Microsoft YaHei", 20, "bold"),
-            text_color="#2980b9"
-        )
-        title_label.pack(anchor="w")
+            font=Theme.FONT_HEADING,
+            text_color=Theme.COLOR_ACCENT_FINANCE
+        ).pack(anchor="w")
 
-        desc_label = ctk.CTkLabel(
+        ctk.CTkLabel(
             title_frame,
             text="收支记账筛选、表格合并、手续费处理、绩效考核等",
-            font=("Microsoft YaHei", 12),
-            text_color="#666666"
+            font=Theme.FONT_BODY,
+            text_color=Theme.COLOR_TEXT_SECONDARY
+        ).pack(anchor="w", pady=(Theme.SPACING_XS, 0))
+
+        # ---- 卡片网格容器 ----
+        self._cards_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
+        self._cards_frame.pack(fill="both", expand=True,
+                               padx=Theme.SPACING_XL, pady=(0, Theme.SPACING_LG))
+
+        # ---- 9个功能卡片 ----
+        self._add_card("1、财务_收支记账_筛选",
+                       "开关账收支记账筛选处理",
+                       "🧾", Theme.COLOR_ACCENT_FINANCE, self.run_financial)
+
+        self._add_card("2、供应商_合并表格",
+                       "将供应商相关Excel表格进行合并",
+                       "📋", Theme.COLOR_ACCENT_FINANCE, self.cwzy_gys_hbbg)
+
+        self._add_card("3、出纳_工具箱",
+                       "打开工具箱（独立窗口，含代工费/比较/预支/报销）",
+                       "💵", Theme.COLOR_ACCENT_FINANCE, self.open_shouxufei_integrated)
+
+        self._add_card("4、绩效考核",
+                       "打开绩效考核工具（数据匹配/稳岗率/合并表格）",
+                       "📈", Theme.COLOR_ACCENT_PURPLE, self.open_cw_jxkh)
+
+        self._add_card("5、预支平账",
+                       "打开预支平账处理工具（独立窗口）",
+                       "🔄", Theme.COLOR_ACCENT_PURPLE, self.open_cw_yzpz)
+
+        self._add_card("6、核算汇总",
+                       "打开核算汇总处理工具（独立窗口）",
+                       "📑", Theme.COLOR_ACCENT_PURPLE, self.open_hs_hz)
+
+        self._add_card("7、银行流水_摘要修改",
+                       "处理银行流水，批量修改摘要内容（往来款/劳务费/工伤理赔等）",
+                       "🏦", Theme.COLOR_ACCENT_FINANCE, self.run_yhls_process)
+
+        self._add_card("8、批量批注工具",
+                       "批量添加批注（B~K列→A列）或拆分批注（A列→右侧列）",
+                       "📝", Theme.COLOR_ACCENT_TEAL, self.open_pl_pizhu_tool)
+
+        self._add_card("9、合并个税",
+                       "递归合并个税统计表并计算手续费",
+                       "🧮", Theme.COLOR_ACCENT_TEAL, self.open_hbgs)
+
+        # 初始布局 + resize 绑定
+        self._layout_cards()
+        self._cards_frame.bind("<Configure>", self._on_resize)
+
+    # ============================================================
+    # 卡片管理
+    # ============================================================
+
+    def _add_card(self, title, desc, icon, color, command):
+        card = FunctionCard(
+            self._cards_frame,
+            title=title, description=desc, icon=icon,
+            color=color, command=command
         )
-        desc_label.pack(anchor="w", pady=(5, 0))
+        self._cards.append(card)
 
-        # 功能卡片容器
-        cards_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
-        cards_frame.pack(fill="both", expand=True, padx=30, pady=(0, 20))
+    def _layout_cards(self):
+        width = self._cards_frame.winfo_width()
+        cols = 2 if width > Theme.CARD_GRID_BREAKPOINT else 1
 
-        # === 8个功能卡片 ===
-        self._create_card(cards_frame,
-                          title="1、财务_收支记账_筛选",
-                          desc="开关账收支记账筛选处理",
-                          icon="🧾",
-                          command=self.run_financial,
-                          color="#2980b9")
+        for c in range(cols):
+            self._cards_frame.grid_columnconfigure(c, weight=1, uniform="card_col")
 
-        self._create_card(cards_frame,
-                          title="2、供应商_合并表格",
-                          desc="将供应商相关Excel表格进行合并",
-                          icon="📋",
-                          command=self.cwzy_gys_hbbg,
-                          color="#2980b9")
+        for i, card in enumerate(self._cards):
+            row, col = divmod(i, cols)
+            card.grid(row=row, column=col,
+                      padx=Theme.SPACING_XS, pady=Theme.SPACING_XS, sticky="ew")
 
-        self._create_card(cards_frame,
-                          title="3、出纳_工具箱",
-                          desc="打开工具箱（独立窗口，含代工费/比较/预支/报销）",
-                          icon="💵",
-                          command=self.open_shouxufei_integrated,
-                          color="#2980b9")
+    def _on_resize(self, event):
+        if event.widget == self._cards_frame:
+            self._layout_cards()
 
-        self._create_card(cards_frame,
-                          title="4、绩效考核",
-                          desc="打开绩效考核工具（数据匹配/稳岗率/合并表格）",
-                          icon="📈",
-                          command=self.open_cw_jxkh,
-                          color="#8e44ad")
-
-        self._create_card(cards_frame,
-                          title="5、预支平账",
-                          desc="打开预支平账处理工具（独立窗口）",
-                          icon="🔄",
-                          command=self.open_cw_yzpz,
-                          color="#8e44ad")
-
-        self._create_card(cards_frame,
-                          title="6、核算汇总",
-                          desc="打开核算汇总处理工具（独立窗口）",
-                          icon="📑",
-                          command=self.open_hs_hz,
-                          color="#8e44ad")
-
-        self._create_card(cards_frame,
-                          title="7、银行流水_摘要修改",
-                          desc="处理银行流水，批量修改摘要内容（往来款/劳务费/工伤理赔等）",
-                          icon="🏦",
-                          command=self.run_yhls_process,
-                          color="#2980b9")
-
-        self._create_card(cards_frame,
-                          title="8、批量批注工具",
-                          desc="批量添加批注（B~K列→A列）或拆分批注（A列→右侧列）",
-                          icon="📝",
-                          command=self.open_pl_pizhu_tool,
-                          color="#16a085")
-
-    def _create_card(self, parent, title, desc, icon, command, color):
-        """创建功能卡片"""
-        card = ctk.CTkFrame(
-            parent,
-            fg_color="#fafafa",
-            corner_radius=10,
-            border_width=1,
-            border_color="#eeeeee"
-        )
-        card.pack(fill="x", pady=6)
-
-        inner = ctk.CTkFrame(card, fg_color="transparent", corner_radius=0)
-        inner.pack(fill="x", padx=20, pady=12)
-
-        # 左侧图标+文字
-        left = ctk.CTkFrame(inner, fg_color="transparent", corner_radius=0)
-        left.pack(side="left", fill="both", expand=True)
-
-        title_text = tk.Label(
-            left,
-            text=f"{icon} {title}",
-            font=("Microsoft YaHei", 14, "bold"),
-            fg="#333333",
-            bg="#fafafa",
-            anchor="w",
-            justify="left"
-        )
-        title_text.pack(anchor="w", fill="x")
-
-        desc_text = tk.Label(
-            left,
-            text=desc,
-            font=("Microsoft YaHei", 11),
-            fg="#888888",
-            bg="#fafafa",
-            anchor="w",
-            justify="left",
-            wraplength=500
-        )
-        desc_text.pack(anchor="w", fill="x", pady=(5, 0))
-
-        # 右侧按钮
-        btn = ctk.CTkButton(
-            inner,
-            text="▶ 运行",
-            font=("Microsoft YaHei", 12),
-            fg_color=color,
-            hover_color="#1a5276" if color == "#2980b9" else "#6c3483" if color == "#8e44ad" else "#117a65",
-            text_color="white",
-            corner_radius=8,
-            width=100,
-            height=36,
-            command=command
-        )
-        btn.pack(side="right", padx=(15, 0))
-
-        return card
-
-    # ---- 功能方法 ----
+    # ============================================================
+    # 业务方法
+    # ============================================================
 
     def run_financial(self):
         """财务_收支记账_筛选"""
@@ -299,4 +257,14 @@ class FinanceFrame(ctk.CTkFrame):
             self.status_var.set("已打开：批量批注工具")
         except Exception as e:
             messagebox.showerror("错误", f"打开批量批注工具失败: \n{str(e)}")
+            traceback.print_exc()
+
+    def open_hbgs(self):
+        """合并个税 - 打开 hbgs 工具"""
+        try:
+            parent = self.master.winfo_toplevel()
+            app = HbgsApp(parent)
+            self.status_var.set("已打开：合并个税工具")
+        except Exception as e:
+            messagebox.showerror("错误", f"打开合并个税工具失败: \n{str(e)}")
             traceback.print_exc()

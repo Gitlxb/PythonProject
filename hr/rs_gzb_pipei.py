@@ -115,54 +115,227 @@ def _compare_values(v1, v2):
     return str(v1).strip() == str(v2).strip()
 
 
-def compare_sheets_and_mark(wb1, sheet1, header_row1, wb2, sheet2, header_row2, field_mapping):
-    """
-    对比两个工作簿的数据，返回需要在 wb2 中标红的单元格坐标集合
+def _is_formula(value):
+    """判断单元格值是否为公式（以 '=' 开头的字符串）"""
+    return isinstance(value, str) and value.strip().startswith("=")
 
-    :param wb1: 主表 workbook (data_only=True 加载)
+
+def _is_total_row(formula_ws, row, header_cols):
+    """
+    检测指定行是否为合计行
+    判定条件：行内任意一个表头对应列的单元格包含 =SUM() 公式
+    """
+    for col in header_cols:
+        formula = formula_ws.cell(row=row, column=col).value
+        if isinstance(formula, str) and formula.strip().upper().startswith("=SUM("):
+            return True
+    return False
+
+
+def _is_data_total_row(formula_ws, data_ws, row, key_col, header_cols):
+    """
+    合计行判定双条件：关键列为空（或"合计"）且行内有 =SUM() 公式
+    避免误判数据行中使用了 =SUM() 的行间/列间求和行为合计行
+    """
+    key_val = data_ws.cell(row=row, column=key_col).value
+    key_str = str(key_val).strip() if key_val is not None else ""
+    return (key_str == "" or key_str == "合计") and _is_total_row(formula_ws, row, header_cols)
+
+
+def _compare_cell_full(v1, v2, f1, f2):
+    """
+    比较两个单元格：值 + 公式 双维度
+    返回: (value_match, formula_match)
+    """
+    # 值比较（复用已有逻辑）
+    value_match = _compare_values(v1, v2)
+
+    # 公式比较
+    f1_is_formula = _is_formula(f1)
+    f2_is_formula = _is_formula(f2)
+
+    if f1_is_formula and f2_is_formula:
+        # 两边都是公式：去除首尾空格后字面对比
+        formula_match = (f1.strip() == f2.strip())
+    else:
+        # 只有一边是公式或都不是公式：公式维度不参与判定，以值比较为准
+        formula_match = True
+
+    return value_match, formula_match
+
+
+def _find_sections(data_ws, formula_ws, header_row, key_col, key_field_name, header_cols):
+    """
+    自动发现工作表内的多个数据段（sections）。
+    向前扫描，当关键列中出现与 key_field_name 相同的值时，视为新段的表头行。
+
+    返回: [(header_row, last_data_row, has_total_row), ...]
+    """
+    sections = []
+    current_header = header_row
+
+    scan_row = header_row + 1
+    while scan_row <= data_ws.max_row:
+        cell_val = data_ws.cell(row=scan_row, column=key_col).value
+        key_str = str(cell_val).strip() if cell_val is not None else ""
+
+        if key_str == key_field_name:
+            # 发现新段表头：上一段结束于 scan_row-1
+            end_row = scan_row - 1
+            has_total = False
+            if end_row >= current_header + 1:
+                has_total = _is_data_total_row(formula_ws, data_ws, end_row, key_col, header_cols)
+            sections.append((current_header, end_row, has_total))
+            current_header = scan_row
+
+        scan_row += 1
+
+    # 最后一段：用 _find_last_data_row 找到尾行
+    last_row = _find_last_data_row(data_ws, current_header, header_cols)
+    if last_row > current_header:
+        has_total = _is_data_total_row(formula_ws, data_ws, last_row, key_col, header_cols)
+        sections.append((current_header, last_row, has_total))
+
+    return sections if sections else [(header_row, last_row, False)]
+
+
+def compare_sheets_and_mark(wb1_data, wb1_formula, sheet1, header_row1,
+                            wb2_data, wb2_formula, sheet2, header_row2,
+                            key_field_1, key_field_2, field_mapping):
+    """
+    按关键列进行键值查找匹配，对比两个工作簿的数据（值 + 公式双维度）
+
+    :param wb1_data: 主表 workbook（data_only=True，用于取值）
+    :param wb1_formula: 主表 workbook（data_only=False，用于取公式）
     :param sheet1: 主表工作簿名
     :param header_row1: 主表表头行号
-    :param wb2: 被匹配表 workbook (data_only=True 加载)
+    :param wb2_data: 被匹配表 workbook（data_only=True，用于取值）
+    :param wb2_formula: 被匹配表 workbook（data_only=False，用于取公式）
     :param sheet2: 被匹配表工作簿名
     :param header_row2: 被匹配表表头行号
+    :param key_field_1: 主表关键列字段名
+    :param key_field_2: 被匹配表关键列字段名
     :param field_mapping: [(field_wb1, field_wb2), ...] 字段映射列表
-    :return: (highlight_cells, compare_rows)
+    :return: (highlight_cells, matched_count, unmatched_keys, total_info)
              highlight_cells: set of (row, col) in wb2
-             compare_rows: 实际对比的行数
+             matched_count: 实际成功匹配的行数
+             unmatched_keys: 基准表中未在目标表找到匹配的关键值列表
+             total_info: 合计行参与情况的汇总 dict
     """
-    ws1 = wb1[sheet1]
-    ws2 = wb2[sheet2]
+    ws1_d = wb1_data[sheet1]
+    ws1_f = wb1_formula[sheet1]
+    ws2_d = wb2_data[sheet2]
+    ws2_f = wb2_formula[sheet2]
 
-    headers1 = _read_headers(ws1, header_row1)
-    headers2 = _read_headers(ws2, header_row2)
+    headers1 = _read_headers(ws1_d, header_row1)
+    headers2 = _read_headers(ws2_d, header_row2)
 
-    last_row1 = _find_last_data_row(ws1, header_row1, list(headers1.values()))
-    last_row2 = _find_last_data_row(ws2, header_row2, list(headers2.values()))
+    # 校验关键列是否存在
+    if key_field_1 not in headers1:
+        raise ValueError(f"工作簿「{sheet1}」中找不到关键列「{key_field_1}」")
+    if key_field_2 not in headers2:
+        raise ValueError(f"工作簿「{sheet2}」中找不到关键列「{key_field_2}」")
 
-    data_rows1 = last_row1 - header_row1
-    data_rows2 = last_row2 - header_row2
-    compare_rows = min(data_rows1, data_rows2)
+    key_col1 = headers1[key_field_1]
+    key_col2 = headers2[key_field_2]
 
+    header_cols1 = list(headers1.values())
+    header_cols2 = list(headers2.values())
+
+    # ---- 自动发现基准表和目标表的所有数据段 ----
+    sections1 = _find_sections(ws1_d, ws1_f, header_row1, key_col1, key_field_1, header_cols1)
+    sections2 = _find_sections(ws2_d, ws2_f, header_row2, key_col2, key_field_2, header_cols2)
+
+    # ---- 构建目标表全段关键列索引 ----
+    target_index = {}
+    total_row_in_target = None
+    for h, last, _ in sections2:
+        for row2 in range(h + 1, last + 1):
+            if _is_data_total_row(ws2_f, ws2_d, row2, key_col2, header_cols2):
+                total_row_in_target = row2
+                continue
+            key_val = ws2_d.cell(row=row2, column=key_col2).value
+            if key_val is None:
+                continue
+            key_str = str(key_val).strip()
+            if key_str == "" or key_str == "合计":
+                continue
+            if key_str not in target_index:
+                target_index[key_str] = row2
+
+    # ---- 统计基准表全段数据行数和是否有合计行 ----
+    base_has_total = any(s[2] for s in sections1)
+    base_data_rows = 0
+    for h, last, _ in sections1:
+        for row1 in range(h + 1, last + 1):
+            if _is_data_total_row(ws1_f, ws1_d, row1, key_col1, header_cols1):
+                continue
+            key_val = ws1_d.cell(row=row1, column=key_col1).value
+            if key_val is None:
+                continue
+            key_str = str(key_val).strip()
+            if key_str and key_str != "合计":
+                base_data_rows += 1
+
+    # ---- 合计行参与条件 ----
+    target_has_total = total_row_in_target is not None
+    target_data_rows = len(target_index)
+    total_can_participate = (base_has_total and target_has_total
+                             and base_data_rows == target_data_rows)
+
+    # ---- 遍历基准表全段，执行匹配和对比 ----
     highlight_cells = set()
+    matched_count = 0
+    unmatched_keys = []
+    matched_target_keys = set()
 
-    for i in range(compare_rows):
-        row1 = header_row1 + 1 + i
-        row2 = header_row2 + 1 + i
+    for h, last, _ in sections1:
+        for row1 in range(h + 1, last + 1):
+            is_total_in_base = _is_data_total_row(ws1_f, ws1_d, row1, key_col1, header_cols1)
+            key_val = ws1_d.cell(row=row1, column=key_col1).value
+            key_str = str(key_val).strip() if key_val is not None else ""
 
-        for f1, f2 in field_mapping:
-            if f1 not in headers1 or f2 not in headers2:
+            if is_total_in_base:
+                if total_can_participate:
+                    row2 = total_row_in_target
+                else:
+                    continue
+            elif key_str and key_str != "合计":
+                row2 = target_index.get(key_str)
+                if row2 is None:
+                    unmatched_keys.append(key_str)
+                    continue
+                matched_target_keys.add(key_str)
+            else:
                 continue
 
-            col1 = headers1[f1]
-            col2 = headers2[f2]
+            matched_count += 1
 
-            v1 = ws1.cell(row=row1, column=col1).value
-            v2 = ws2.cell(row=row2, column=col2).value
+            # 逐字段值 + 公式对比
+            for f1, f2 in field_mapping:
+                if f1 not in headers1 or f2 not in headers2:
+                    continue
+                col1 = headers1[f1]
+                col2 = headers2[f2]
+                v1 = ws1_d.cell(row=row1, column=col1).value
+                v2 = ws2_d.cell(row=row2, column=col2).value
+                f1_val = ws1_f.cell(row=row1, column=col1).value
+                f2_val = ws2_f.cell(row=row2, column=col2).value
+                val_ok, formula_ok = _compare_cell_full(v1, v2, f1_val, f2_val)
+                if not val_ok or not formula_ok:
+                    highlight_cells.add((row2, col2))
 
-            if not _compare_values(v1, v2):
-                highlight_cells.add((row2, col2))
+    extra_target_keys = [k for k in target_index if k not in matched_target_keys]
+    total_info = {
+        "participated": total_can_participate,
+        "base_has_total": base_has_total,
+        "target_has_total": target_has_total,
+        "base_data_rows": base_data_rows,
+        "target_data_rows": target_data_rows,
+        "extra_target_keys": extra_target_keys,
+    }
 
-    return highlight_cells, compare_rows
+    return highlight_cells, matched_count, unmatched_keys, total_info
 
 
 def apply_highlight_to_cells(wb, sheet_name, highlight_cells):
@@ -189,30 +362,37 @@ def apply_highlight_to_cells(wb, sheet_name, highlight_cells):
 
 def process_mode_a(jia_file, jia_sheet, jia_header_row,
                    nei_file, nei_sheet, nei_header_row,
+                   key_field_1, key_field_2,
                    field_mapping, wb_out=None):
     """
     模式A：甲方工资表（基准）匹配内部工资表
-    对内部表标红差异单元格后返回 workbook 对象。
-    支持传入已有的 wb_out 以在同一文件上累积标红。
+    按关键列键值查找，值+公式双维度对比，对内部表标红差异单元格。
 
+    :param key_field_1: 甲方关键列字段名
+    :param key_field_2: 内部关键列字段名
     :param field_mapping: [(甲方字段, 内部字段), ...]
     :param wb_out: 已加载的内部 workbook（可选，用于多次匹配累积标红）
-    :return: (wb_out, compare_rows, diff_count)
+    :return: (wb_out, matched_count, diff_count, unmatched_keys, total_info)
              wb_out: 处理后的内部 workbook 对象（尚未保存）
     """
-    # 1. data_only 加载用于对比
+    # 1. 双加载：data_only=True 用于取值，data_only=False 用于取公式
     wb_jia_data = openpyxl.load_workbook(jia_file, data_only=True)
+    wb_jia_formula = openpyxl.load_workbook(jia_file, data_only=False)
     wb_nei_data = openpyxl.load_workbook(nei_file, data_only=True)
+    wb_nei_formula = openpyxl.load_workbook(nei_file, data_only=False)
 
     try:
-        highlight_cells, compare_rows = compare_sheets_and_mark(
-            wb_jia_data, jia_sheet, jia_header_row,
-            wb_nei_data, nei_sheet, nei_header_row,
+        highlight_cells, matched_count, unmatched_keys, total_info = compare_sheets_and_mark(
+            wb_jia_data, wb_jia_formula, jia_sheet, jia_header_row,
+            wb_nei_data, wb_nei_formula, nei_sheet, nei_header_row,
+            key_field_1, key_field_2,
             field_mapping
         )
     finally:
         wb_jia_data.close()
+        wb_jia_formula.close()
         wb_nei_data.close()
+        wb_nei_formula.close()
 
     # 2. 普通模式加载内部文件用于输出（保留公式和格式）
     if wb_out is None:
@@ -221,23 +401,29 @@ def process_mode_a(jia_file, jia_sheet, jia_header_row,
     # 3. 对内部表应用标红
     apply_highlight_to_cells(wb_out, nei_sheet, highlight_cells)
 
-    return wb_out, compare_rows, len(highlight_cells)
+    return wb_out, matched_count, len(highlight_cells), unmatched_keys, total_info
 
 
-def process_mode_b_compare(file_path, sheet_a, header_a, sheet_b, header_b, field_mapping):
+def process_mode_b_compare(file_path, sheet_a, header_a, sheet_b, header_b,
+                           key_field_1, key_field_2, field_mapping):
     """
     模式B：内部工作簿A 匹配 内部工作簿B（同一文件）
-    仅执行对比，返回需要标红的单元格坐标
+    按关键列键值查找，值+公式双维度对比，仅执行对比并返回标红坐标。
 
-    :return: (highlight_cells, compare_rows, diff_count)
+    :param key_field_1: 工作簿A关键列字段名
+    :param key_field_2: 工作簿B关键列字段名
+    :return: (highlight_cells, matched_count, diff_count, unmatched_keys, total_info)
     """
     wb_data = openpyxl.load_workbook(file_path, data_only=True)
+    wb_formula = openpyxl.load_workbook(file_path, data_only=False)
     try:
-        highlight_cells, compare_rows = compare_sheets_and_mark(
-            wb_data, sheet_a, header_a,
-            wb_data, sheet_b, header_b,
+        highlight_cells, matched_count, unmatched_keys, total_info = compare_sheets_and_mark(
+            wb_data, wb_formula, sheet_a, header_a,
+            wb_data, wb_formula, sheet_b, header_b,
+            key_field_1, key_field_2,
             field_mapping
         )
-        return highlight_cells, compare_rows, len(highlight_cells)
+        return highlight_cells, matched_count, len(highlight_cells), unmatched_keys, total_info
     finally:
         wb_data.close()
+        wb_formula.close()

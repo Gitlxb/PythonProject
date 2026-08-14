@@ -26,6 +26,7 @@ from general.cf_biaoge_li import split_excel_by_column as split_sheets
 from general.Ncengjiwenjj_fzzt import main_zfzwj
 from general.biaogegesi_zh import convert_and_copy_files as convert_format, select_directory
 from general.zh_pdf_Excel import PDFToExcelConverter
+from ui_components import FunctionCard, Theme
 
 
 class GeneralFrame(ctk.CTkFrame):
@@ -34,141 +35,92 @@ class GeneralFrame(ctk.CTkFrame):
     def __init__(self, parent, status_var=None):
         super().__init__(parent, fg_color="white", corner_radius=0)
         self.status_var = status_var or tk.StringVar()
+        self._cards = []
         self._build_ui()
 
     def _build_ui(self):
         """构建UI"""
-        # 标题区
+        # ---- 标题区 ----
         title_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
-        title_frame.pack(fill="x", padx=30, pady=(25, 15))
+        title_frame.pack(fill="x", padx=Theme.SPACING_XL, pady=(Theme.SPACING_LG, Theme.SPACING_MD))
 
-        title_label = ctk.CTkLabel(
+        ctk.CTkLabel(
             title_frame,
             text="📂 通用工具",
-            font=("Microsoft YaHei", 20, "bold"),
-            text_color="#27ae60"
-        )
-        title_label.pack(anchor="w")
+            font=Theme.FONT_HEADING,
+            text_color=Theme.COLOR_ACCENT_GENERAL
+        ).pack(anchor="w")
 
-        desc_label = ctk.CTkLabel(
+        ctk.CTkLabel(
             title_frame,
             text="Excel 文件拆分与批量获取工具",
-            font=("Microsoft YaHei", 12),
-            text_color="#666666"
+            font=Theme.FONT_BODY,
+            text_color=Theme.COLOR_TEXT_SECONDARY
+        ).pack(anchor="w", pady=(Theme.SPACING_XS, 0))
+
+        # ---- 卡片网格容器 ----
+        self._cards_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
+        self._cards_frame.pack(fill="both", expand=True,
+                               padx=Theme.SPACING_XL, pady=(0, Theme.SPACING_LG))
+
+        # ---- 功能卡片 ----
+        self._add_card("1、拆分_拆成多个Excel文件",
+                       "按列值将一个Excel拆分成多个独立文件",
+                       "📄", Theme.COLOR_ACCENT_GENERAL, self.run_split_to_files)
+
+        self._add_card("2、拆分_拆成多个工作表",
+                       "按列值将数据拆分到同一文件的多个Sheet",
+                       "📊", Theme.COLOR_ACCENT_GENERAL, self.run_split_to_sheets)
+
+        self._add_card("3、N层级文件夹中只获取文件",
+                       "从深层嵌套目录结构中提取所有文件",
+                       "📁", Theme.COLOR_ACCENT_GENERAL, self.run_split_to_zhqwj)
+
+        self._add_card("4、表格格式转换",
+                       "将文件夹内所有Excel/CSV统一转换为xlsx格式",
+                       "🔄", Theme.COLOR_ACCENT_TEAL, self.run_convert_format)
+
+        self._add_card("5、PDF转Excel",
+                       "将PDF表格提取并转换为Excel文件（对齐列版）",
+                       "📄", Theme.COLOR_ACCENT_TEAL, self.open_pdf_to_excel)
+
+        # 初始布局 + resize 绑定
+        self._layout_cards()
+        self._cards_frame.bind("<Configure>", self._on_resize)
+
+    # ============================================================
+    # 卡片管理
+    # ============================================================
+
+    def _add_card(self, title, desc, icon, color, command):
+        """创建并登记一张功能卡片"""
+        card = FunctionCard(
+            self._cards_frame,
+            title=title, description=desc, icon=icon,
+            color=color, command=command
         )
-        desc_label.pack(anchor="w", pady=(5, 0))
+        self._cards.append(card)
 
-        # 功能卡片容器
-        cards_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
-        cards_frame.pack(fill="both", expand=True, padx=30, pady=(0, 20))
+    def _layout_cards(self):
+        """响应式网格：宽屏 2 列，窄屏 1 列"""
+        width = self._cards_frame.winfo_width()
+        cols = 2 if width > Theme.CARD_GRID_BREAKPOINT else 1
 
-        # === 卡片1: 拆分成多个Excel文件 ===
-        self._create_card(
-            cards_frame,
-            title="1、拆分_拆成多个Excel文件",
-            desc="按列值将一个Excel拆分成多个独立文件",
-            icon="📄",
-            command=self.run_split_to_files,
-            color="#27ae60"
-        )
+        for c in range(cols):
+            self._cards_frame.grid_columnconfigure(c, weight=1, uniform="card_col")
 
-        # === 卡片2: 拆分成多个工作表 ===
-        self._create_card(
-            cards_frame,
-            title="2、拆分_拆成多个工作表",
-            desc="按列值将数据拆分到同一文件的多个Sheet",
-            icon="📊",
-            command=self.run_split_to_sheets,
-            color="#27ae60"
-        )
+        for i, card in enumerate(self._cards):
+            row, col = divmod(i, cols)
+            card.grid(row=row, column=col,
+                      padx=Theme.SPACING_XS, pady=Theme.SPACING_XS, sticky="ew")
 
-        # === 卡片3: N层级文件夹获取文件 ===
-        self._create_card(
-            cards_frame,
-            title="3、N层级文件夹中只获取文件",
-            desc="从深层嵌套目录结构中提取所有文件",
-            icon="📁",
-            command=self.run_split_to_zhqwj,
-            color="#27ae60"
-        )
+    def _on_resize(self, event):
+        if event.widget == self._cards_frame:
+            self._layout_cards()
 
-        # === 卡片4: 表格格式转换 ===
-        self._create_card(
-            cards_frame,
-            title="4、表格格式转换",
-            desc="将文件夹内所有Excel/CSV统一转换为xlsx格式",
-            icon="🔄",
-            command=self.run_convert_format,
-            color="#16a085"
-        )
-
-        # === 卡片5: PDF转Excel ===
-        self._create_card(
-            cards_frame,
-            title="5、PDF转Excel",
-            desc="将PDF表格提取并转换为Excel文件（对齐列版）",
-            icon="📄",
-            command=self.open_pdf_to_excel,
-            color="#16a085"
-        )
-
-    def _create_card(self, parent, title, desc, icon, command, color):
-        """创建功能卡片"""
-        card = ctk.CTkFrame(
-            parent,
-            fg_color="#fafafa",
-            corner_radius=10,
-            border_width=1,
-            border_color="#eeeeee"
-        )
-        card.pack(fill="x", pady=8)
-
-        inner = ctk.CTkFrame(card, fg_color="transparent", corner_radius=0)
-        inner.pack(fill="x", padx=20, pady=15)
-
-        # 左侧图标+文字
-        left = ctk.CTkFrame(inner, fg_color="transparent", corner_radius=0)
-        left.pack(side="left", fill="both", expand=True)
-
-        title_text = tk.Label(
-            left,
-            text=f"{icon} {title}",
-            font=("Microsoft YaHei", 14, "bold"),
-            fg="#333333",
-            bg="#fafafa",
-            anchor="w",
-            justify="left"
-        )
-        title_text.pack(anchor="w", fill="x")
-
-        desc_text = tk.Label(
-            left,
-            text=desc,
-            font=("Microsoft YaHei", 11),
-            fg="#888888",
-            bg="#fafafa",
-            anchor="w",
-            justify="left",
-            wraplength=500
-        )
-        desc_text.pack(anchor="w", fill="x", pady=(5, 0))
-
-        # 右侧按钮
-        btn = ctk.CTkButton(
-            inner,
-            text="▶ 运行",
-            font=("Microsoft YaHei", 12),
-            fg_color=color,
-            hover_color="#1e8449" if color == "#27ae60" else "#117a65",
-            text_color="white",
-            corner_radius=8,
-            width=100,
-            height=36,
-            command=command
-        )
-        btn.pack(side="right", padx=(15, 0))
-
-        return card
+    # ============================================================
+    # 业务方法
+    # ============================================================
 
     def run_split_to_files(self):
         try:

@@ -8,16 +8,151 @@
 整合：通用功能、财务功能、人事功能
 """
 
-import customtkinter as ctk
+# ============================================================
+# Step 0: Windows 高 DPI 感知 —— 一切之前，确保字体清晰
+# ============================================================
+import ctypes
+import sys as _sys
+if _sys.platform == "win32":
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # Per-monitor v2
+    except (AttributeError, OSError):
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        except (AttributeError, OSError):
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()
+            except (AttributeError, OSError):
+                pass
+
+# ============================================================
+# Step 1: 启动画面 —— 先亮 Splash，再加载重型模块
+# ============================================================
 import tkinter as tk
+
+_SPLASH_BG = "#2c3e50"
+_SPLASH_FG = "#ffffff"
+_SPLASH_MUTED = "#7f8c8d"
+_SPLASH_W, _SPLASH_H = 500, 340
+_BAR_W, _BAR_H = 300, 4
+
+_splash = tk.Tk()
+_splash.overrideredirect(True)       # 无边框
+_splash.attributes("-topmost", True)  # 置顶
+
+# ---- 尺寸 & 居中 ----
+screen_w = _splash.winfo_screenwidth()
+screen_h = _splash.winfo_screenheight()
+_splash.geometry(
+    f"{_SPLASH_W}x{_SPLASH_H}+{(screen_w - _SPLASH_W) // 2}+{(screen_h - _SPLASH_H) // 2}"
+)
+_splash.configure(bg=_SPLASH_BG)
+
+# ---- 品牌名 ----
+tk.Label(
+    _splash,
+    text="浙江锦途",
+    font=("Microsoft YaHei UI", 30, "bold"),
+    fg=_SPLASH_FG, bg=_SPLASH_BG
+).pack(pady=(56, 4))
+
+# ---- 副标题 ----
+tk.Label(
+    _splash,
+    text="Excel 数据处理工具集",
+    font=("Microsoft YaHei UI", 14),
+    fg=_SPLASH_MUTED, bg=_SPLASH_BG
+).pack()
+
+# ---- 分割线 ----
+tk.Frame(_splash, height=1, bg="#3d566e").pack(
+    fill="x", padx=80, pady=(20, 14)
+)
+
+# ---- 加载提示 ----
+_load_var = tk.StringVar(value="正在启动，请稍候 ...")
+tk.Label(
+    _splash,
+    textvariable=_load_var,
+    font=("Microsoft YaHei UI", 12),
+    fg="#95a5a6", bg=_SPLASH_BG
+).pack()
+
+# ---- 版本号 ----
+tk.Label(
+    _splash,
+    text="v4.0",
+    font=("Microsoft YaHei UI", 11),
+    fg="#555555", bg=_SPLASH_BG
+).pack(pady=(14, 0))
+
+# ---- 进度条（Canvas 自绘，背景槽 + 填充矩形）----
+_progress_var = tk.DoubleVar(value=0)
+_percent_var = tk.StringVar(value="0%")
+
+_progress_canvas = tk.Canvas(
+    _splash,
+    width=_BAR_W, height=_BAR_H,
+    bg=_SPLASH_BG, highlightthickness=0, bd=0
+)
+_progress_canvas.pack(pady=(22, 4))
+
+# 背景槽（深色）
+_progress_canvas.create_rectangle(
+    0, 0, _BAR_W, _BAR_H,
+    fill="#1a2530", outline=""
+)
+# 进度填充（绿色，宽度由 _set_progress 动态控制）
+_fill_id = _progress_canvas.create_rectangle(
+    0, 0, 0, _BAR_H,
+    fill="#27ae60", outline=""
+)
+
+# 百分比文字（居中，紧贴进度条下方）
+tk.Label(
+    _splash,
+    textvariable=_percent_var,
+    font=("Microsoft YaHei UI", 10),
+    fg=_SPLASH_MUTED, bg=_SPLASH_BG
+).pack()
+
+# ---- 进度更新工具函数 ----
+def _set_progress(pct: float, text: str = None):
+    """更新进度条和提示文字（0-100）"""
+    pct = max(0.0, min(100.0, pct))
+    _progress_var.set(pct)
+    _progress_canvas.coords(_fill_id, 0, 0, _BAR_W * pct / 100, _BAR_H)
+    _percent_var.set(f"{int(pct)}%")
+    if text is not None:
+        _load_var.set(text)
+    _splash.update_idletasks()  # 不阻塞主线程，刷新 idle 任务
+
+# 初始 0%
+_set_progress(0, "正在启动，请稍候 ...")
+_splash.update()
+
+# ============================================================
+# Step 2: 重型导入（Splash 覆盖此阶段，按阶段上报进度）
+# ============================================================
+
+_set_progress(15, "正在加载核心模块 ...")
+import customtkinter as ctk
+
+_set_progress(45, "正在加载功能模块 ...")
 from frame_general import GeneralFrame
 from frame_finance import FinanceFrame
 from frame_hr import HRFrame
+from ui_components import Theme
 
-# 设置CustomTkinter外观
-ctk.set_appearance_mode("light")  # 可选: "light", "dark", "system"
-ctk.set_default_color_theme("blue")  # 可选: "blue", "green", "dark-blue"
+ctk.set_appearance_mode("light")
+ctk.set_default_color_theme("blue")
 
+_set_progress(70, "正在准备界面 ...")
+
+
+# ============================================================
+# Step 3: 主界面
+# ============================================================
 
 class MainApp:
     """浙江锦途主界面 - 左侧导航+Frame切换"""
@@ -25,18 +160,30 @@ class MainApp:
     def __init__(self, root):
         self.root = root
         self.root.title("浙江锦途 - 处理Excel的Python脚本")
-        self.root.geometry("1100x750")
-        self.root.minsize(950, 650)
+        self.root.geometry("1180x800")
+        self.root.minsize(1000, 680)
 
         # 当前激活的Frame
         self.current_frame = None
         self.frame_instances = {}
 
-        # 导航按钮引用
-        self.nav_buttons = {}
+        # 导航引用
+        self.nav_buttons = {}   # key -> CTkButton
+        self.nav_strips = {}    # key -> tk.Frame (左侧色条)
+
+        # 模块颜色映射
+        self.module_colors = {
+            "general": Theme.COLOR_ACCENT_GENERAL,
+            "finance": Theme.COLOR_ACCENT_FINANCE,
+            "hr": Theme.COLOR_ACCENT_HR,
+        }
 
         # 创建界面
         self._create_ui()
+
+    # ============================================================
+    # 界面构建
+    # ============================================================
 
     def _create_ui(self):
         """创建界面布局"""
@@ -44,249 +191,200 @@ class MainApp:
         main_container = ctk.CTkFrame(self.root, fg_color="transparent")
         main_container.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
 
-        # ===== 左侧导航栏（深色背景）=====
-        nav_frame = ctk.CTkFrame(main_container, width=240, fg_color="#2c3e50", corner_radius=0)
-        nav_frame.pack(side="left", fill="y")
-        nav_frame.pack_propagate(False)
+        # ===== 左侧导航栏 =====
+        self._build_nav(main_container)
 
-        # 导航标题
-        title_label = ctk.CTkLabel(
-            nav_frame,
-            text="🔧 功能菜单",
-            font=("Microsoft YaHei", 20, "bold"),
-            text_color="white",
-            pady=20
-        )
-        title_label.pack(pady=(20, 10))
-
-        # 分隔线
-        separator = ctk.CTkFrame(nav_frame, height=2, fg_color="#34495e")
-        separator.pack(fill="x", padx=15, pady=(0, 15))
-
-        # ===== 分类：通用功能 =====
-        category_label = ctk.CTkLabel(
-            nav_frame,
-            text="— 通用功能 —",
-            font=("Microsoft YaHei", 12),
-            text_color="#7f8c8d"
-        )
-        category_label.pack(padx=15, pady=(10, 5), anchor="w")
-
-        general_items = [
-            {"key": "general", "text": "📂 通用工具", "desc": "Excel拆分 & 文件获取"},
-        ]
-        for item in general_items:
-            btn = ctk.CTkButton(
-                nav_frame,
-                text=item["text"],
-                command=lambda k=item["key"]: self._switch_frame(k),
-                font=("Microsoft YaHei", 14),
-                fg_color="#34495e",
-                hover_color="#27ae60",
-                text_color="white",
-                corner_radius=8,
-                height=45,
-                anchor="w"
-            )
-            btn.pack(pady=5, padx=15, fill="x")
-            self.nav_buttons[item["key"]] = btn
-
-            desc_label = ctk.CTkLabel(
-                nav_frame,
-                text=item["desc"],
-                font=("Microsoft YaHei", 11),
-                text_color="#7f8c8d"
-            )
-            desc_label.pack(padx=(25, 0), pady=(0, 8), anchor="w")
-
-        # ===== 分类：财务功能 =====
-        category_label2 = ctk.CTkLabel(
-            nav_frame,
-            text="— 财务功能 —",
-            font=("Microsoft YaHei", 12),
-            text_color="#7f8c8d"
-        )
-        category_label2.pack(padx=15, pady=(20, 5), anchor="w")
-
-        finance_items = [
-            {"key": "finance", "text": "💰 财务工具", "desc": "记账/合并/手续费/考核等"},
-        ]
-        for item in finance_items:
-            btn = ctk.CTkButton(
-                nav_frame,
-                text=item["text"],
-                command=lambda k=item["key"]: self._switch_frame(k),
-                font=("Microsoft YaHei", 14),
-                fg_color="#34495e",
-                hover_color="#2980b9",
-                text_color="white",
-                corner_radius=8,
-                height=45,
-                anchor="w"
-            )
-            btn.pack(pady=5, padx=15, fill="x")
-            self.nav_buttons[item["key"]] = btn
-
-            desc_label2 = ctk.CTkLabel(
-                nav_frame,
-                text=item["desc"],
-                font=("Microsoft YaHei", 11),
-                text_color="#7f8c8d"
-            )
-            desc_label2.pack(padx=(25, 0), pady=(0, 8), anchor="w")
-
-        # ===== 分类：人事功能 =====
-        category_label3 = ctk.CTkLabel(
-            nav_frame,
-            text="— 人事功能 —",
-            font=("Microsoft YaHei", 12),
-            text_color="#7f8c8d"
-        )
-        category_label3.pack(padx=15, pady=(20, 5), anchor="w")
-
-        hr_items = [
-            {"key": "hr", "text": "👥 人事工具", "desc": "在职离职拆分/工资表匹配/Word合并"},
-        ]
-        for item in hr_items:
-            btn = ctk.CTkButton(
-                nav_frame,
-                text=item["text"],
-                command=lambda k=item["key"]: self._switch_frame(k),
-                font=("Microsoft YaHei", 14),
-                fg_color="#34495e",
-                hover_color="#e67e22",
-                text_color="white",
-                corner_radius=8,
-                height=45,
-                anchor="w"
-            )
-            btn.pack(pady=5, padx=15, fill="x")
-            self.nav_buttons[item["key"]] = btn
-
-            desc_label3 = ctk.CTkLabel(
-                nav_frame,
-                text=item["desc"],
-                font=("Microsoft YaHei", 11),
-                text_color="#7f8c8d"
-            )
-            desc_label3.pack(padx=(25, 0), pady=(0, 8), anchor="w")
-
-        # 底部公告区域
-        separator2 = ctk.CTkFrame(nav_frame, height=2, fg_color="#34495e")
-        separator2.pack(fill="x", padx=15, pady=(30, 15), side="bottom")
-
-        bottom_frame = ctk.CTkFrame(nav_frame, fg_color="transparent")
-        bottom_frame.pack(side="bottom", fill="x", pady=15, padx=15)
-
-        info_label = ctk.CTkLabel(
-            bottom_frame,
-            text="📢 需要添加需求\n   请在企业微信搜索: 龙喜兵",
-            font=("Microsoft YaHei", 11),
-            text_color="#7f8c8d",
-            justify="left"
-        )
-        info_label.pack(anchor="w")
-
-        version_label = ctk.CTkLabel(
-            bottom_frame,
-            text="\nv4.0 CustomTkinter版",
-            font=("Microsoft YaHei", 12),
-            text_color="#555555"
-        )
-        version_label.pack(anchor="w")
-
-        # ===== 右侧内容区（白色背景 + 可滚动）=====
-        content_outer = ctk.CTkFrame(main_container, fg_color="white", corner_radius=0)
-        content_outer.pack(side="right", fill="both", expand=True)
-
-        # 垂直滚动条
-        self.content_scrollbar = ctk.CTkScrollbar(content_outer, orientation="vertical")
-        self.content_scrollbar.pack(side="right", fill="y")
-
-        # 画布作为可滚动容器
-        self.canvas = tk.Canvas(
-            content_outer,
-            bg="white",
-            yscrollcommand=self.content_scrollbar.set,
-            highlightthickness=0
-        )
-        self.canvas.pack(side="left", fill="both", expand=True)
-        self.content_scrollbar.configure(command=self.canvas.yview)
-
-        # 内容frame（放入canvas中）
-        self.content_frame = tk.Frame(self.canvas, bg="white")
-        self.canvas_window = self.canvas.create_window(
-            (0, 0), window=self.content_frame, anchor="nw"
-        )
-
-        # 绑定鼠标滚轮事件（支持Windows）
-        def _on_mousewheel(event):
-            self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-        def _bind_mousewheel(event):
-            self.canvas.bind_all("<MouseWheel>", _on_mousewheel)
-
-        def _unbind_mousewheel(event):
-            self.canvas.unbind_all("<MouseWheel>")
-
-        self.canvas.bind("<Enter>", _bind_mousewheel)
-        self.canvas.bind("<Leave>", _unbind_mousewheel)
-
-        # 当内容高度变化时更新滚动区域
-        self.content_frame.bind("<Configure>", self._on_content_configure)
-
-        # 当Canvas宽度变化时，同步调整内部frame宽度（自适应布局）
-        self.canvas.bind("<Configure>", self._on_canvas_configure)
+        # ===== 右侧内容区（CTkScrollableFrame）=====
+        self._build_content(main_container)
 
         # ===== 底部状态栏 =====
-        status_bar = ctk.CTkFrame(self.root, height=32, fg_color="#ecf0f1", corner_radius=0)
-        status_bar.pack(side="bottom", fill="x")
-        status_bar.pack_propagate(False)
-
-        self.status_var = tk.StringVar(value="就绪 - 请选择左侧功能菜单")
-        status_label = ctk.CTkLabel(
-            status_bar,
-            textvariable=self.status_var,
-            font=("Microsoft YaHei", 10),
-            text_color="#7f8c8d",
-            anchor="w"
-        )
-        status_label.pack(fill="x", padx=20)
+        self._build_status_bar()
 
         # 默认显示第一个功能
         self._switch_frame("general")
 
+    def _build_nav(self, parent):
+        """构建左侧导航栏"""
+        nav_frame = ctk.CTkFrame(
+            parent,
+            width=Theme.NAV_WIDTH,
+            fg_color=Theme.COLOR_NAV_BG,
+            corner_radius=0
+        )
+        nav_frame.pack(side="left", fill="y")
+        nav_frame.pack_propagate(False)
+
+        # ---- 标题 ----
+        ctk.CTkLabel(
+            nav_frame,
+            text="🔧 功能菜单",
+            font=Theme.FONT_HEADING,
+            text_color=Theme.COLOR_TEXT_ON_DARK,
+        ).pack(pady=(Theme.SPACING_LG, Theme.SPACING_SM))
+
+        # ---- 分隔线 ----
+        ctk.CTkFrame(
+            nav_frame, height=2, fg_color=Theme.COLOR_NAV_DIVIDER
+        ).pack(fill="x", padx=Theme.SPACING_MD, pady=(0, Theme.SPACING_MD))
+
+        # ---- 导航项 ----
+        nav_items = [
+            ("general", "📂 通用工具", "Excel拆分 & 文件获取",     Theme.COLOR_ACCENT_GENERAL),
+            ("finance", "💰 财务工具", "记账/合并/手续费/考核等",  Theme.COLOR_ACCENT_FINANCE),
+            ("hr",      "👥 人事工具", "在职离职/工资匹配/文档",   Theme.COLOR_ACCENT_HR),
+        ]
+
+        for key, text, desc, color in nav_items:
+            # 分类标签
+            ctk.CTkLabel(
+                nav_frame,
+                text=desc,
+                font=Theme.FONT_CAPTION,
+                text_color=Theme.COLOR_TEXT_MUTED
+            ).pack(padx=Theme.SPACING_LG, pady=(Theme.SPACING_LG, Theme.SPACING_XS), anchor="w")
+
+            # 按钮容器（包裹色条+按钮）
+            btn_wrapper = ctk.CTkFrame(
+                nav_frame, fg_color="transparent",
+                corner_radius=0, height=40
+            )
+            btn_wrapper.pack(pady=Theme.SPACING_XS, padx=Theme.SPACING_MD, fill="x")
+            btn_wrapper.pack_propagate(False)
+
+            # 左侧色条（默认与背景同色=隐藏，激活时显示模块色）
+            strip = tk.Frame(
+                btn_wrapper,
+                bg=Theme.COLOR_NAV_BG,
+                width=3, highlightthickness=0
+            )
+            strip.pack(side="left", fill="y")
+            strip.pack_propagate(False)
+            self.nav_strips[key] = strip
+
+            # 按钮
+            btn = ctk.CTkButton(
+                btn_wrapper,
+                text=text,
+                command=lambda k=key: self._switch_frame(k),
+                font=Theme.FONT_BODY,
+                fg_color=Theme.COLOR_NAV_BUTTON,
+                hover_color=Theme.COLOR_NAV_BUTTON_ACTIVE,
+                text_color=Theme.COLOR_TEXT_ON_DARK,
+                corner_radius=Theme.RADIUS_MD,
+                height=40,
+                anchor="w"
+            )
+            btn.pack(side="left", fill="both", expand=True)
+            self.nav_buttons[key] = btn
+
+        # ---- 底部分隔线（固定底部）----
+        ctk.CTkFrame(
+            nav_frame, height=2, fg_color=Theme.COLOR_NAV_DIVIDER
+        ).pack(fill="x", padx=Theme.SPACING_MD,
+               pady=(Theme.SPACING_XL, Theme.SPACING_MD), side="bottom")
+
+        # ---- 底部信息 ----
+        bottom = ctk.CTkFrame(nav_frame, fg_color="transparent")
+        bottom.pack(side="bottom", fill="x", pady=Theme.SPACING_MD,
+                    padx=Theme.SPACING_MD)
+
+        ctk.CTkLabel(
+            bottom,
+            text="📢 需要添加需求\n   请在企业微信搜索: 龙喜兵",
+            font=Theme.FONT_CAPTION,
+            text_color=Theme.COLOR_TEXT_MUTED,
+            justify="left"
+        ).pack(anchor="w")
+
+        ctk.CTkLabel(
+            bottom,
+            text="\nv4.0 CustomTkinter版",
+            font=Theme.FONT_BODY,
+            text_color=Theme.COLOR_TEXT_SECONDARY
+        ).pack(anchor="w")
+
+    def _build_content(self, parent):
+        """构建右侧可滚动内容区"""
+        content_outer = ctk.CTkFrame(
+            parent,
+            fg_color=Theme.COLOR_BG_CONTENT,
+            corner_radius=0
+        )
+        content_outer.pack(side="right", fill="both", expand=True)
+
+        self.content_frame = ctk.CTkScrollableFrame(
+            content_outer,
+            fg_color=Theme.COLOR_BG_CONTENT,
+            corner_radius=0,
+            scrollbar_button_color="#cccccc",
+            scrollbar_button_hover_color="#aaaaaa"
+        )
+        self.content_frame.pack(fill="both", expand=True)
+
+    def _build_status_bar(self):
+        """构建底部状态栏"""
+        status_bar = ctk.CTkFrame(
+            self.root,
+            height=Theme.STATUS_BAR_HEIGHT,
+            fg_color=Theme.COLOR_STATUS_BAR,
+            corner_radius=0
+        )
+        status_bar.pack(side="bottom", fill="x")
+        status_bar.pack_propagate(False)
+
+        # 左侧状态指示灯
+        self.status_dot = tk.Canvas(
+            status_bar,
+            width=14, height=Theme.STATUS_BAR_HEIGHT,
+            bg=Theme.COLOR_STATUS_BAR,
+            highlightthickness=0
+        )
+        self.status_dot.pack(side="left", padx=(Theme.SPACING_LG, Theme.SPACING_SM))
+        self._dot_id = self.status_dot.create_oval(
+            4, 13, 12, 21, fill=Theme.COLOR_ACCENT_GENERAL, outline=""
+        )
+
+        # 状态文本
+        self.status_var = tk.StringVar(value="就绪 - 请选择左侧功能菜单")
+        ctk.CTkLabel(
+            status_bar,
+            textvariable=self.status_var,
+            font=Theme.FONT_SMALL,
+            text_color=Theme.COLOR_TEXT_SECONDARY,
+            anchor="w"
+        ).pack(side="left", fill="x", expand=True, padx=(0, Theme.SPACING_LG))
+
+    # ============================================================
+    # 导航切换
+    # ============================================================
+
     def _switch_frame(self, frame_key: str):
         """切换到指定的功能Frame"""
-        # 更新导航按钮样式
-        color_map = {
-            "general": "#27ae60",
-            "finance": "#2980b9",
-            "hr": "#e67e22",
-        }
-        highlight_color = color_map.get(frame_key, "#3498db")
+        color = self.module_colors.get(frame_key, Theme.COLOR_ACCENT_GENERAL)
 
         for key, btn in self.nav_buttons.items():
+            strip = self.nav_strips.get(key)
             if key == frame_key:
-                btn.configure(fg_color=highlight_color)
+                btn.configure(fg_color=Theme.COLOR_NAV_BUTTON_ACTIVE)
+                if strip:
+                    strip.configure(bg=color)
             else:
-                btn.configure(fg_color="#34495e")
+                btn.configure(fg_color=Theme.COLOR_NAV_BUTTON)
+                if strip:
+                    strip.configure(bg=Theme.COLOR_NAV_BG)
 
-        # 隐藏当前Frame
+        self.status_dot.itemconfig(self._dot_id, fill=color)
+
         if self.current_frame is not None:
             self.current_frame.pack_forget()
 
-        # 获取或创建目标Frame实例
         if frame_key not in self.frame_instances:
             self.frame_instances[frame_key] = self._create_frame(frame_key)
 
         target_frame = self.frame_instances[frame_key]
-
-        # 显示新Frame
         target_frame.pack(fill=tk.BOTH, expand=True)
         self.current_frame = target_frame
 
-        # 更新状态栏
         status_texts = {
             "general": "通用工具 - Excel文件拆分与文件获取",
             "finance": "财务工具 - 收支记账、合并表格、绩效考核等",
@@ -294,8 +392,7 @@ class MainApp:
         }
         self.status_var.set(status_texts.get(frame_key, ""))
 
-    def _create_frame(self, frame_key: str) -> tk.Frame:
-        """根据key创建对应的Frame实例"""
+    def _create_frame(self, frame_key: str) -> ctk.CTkFrame:
         if frame_key == "general":
             return GeneralFrame(self.content_frame, self.status_var)
         elif frame_key == "finance":
@@ -305,19 +402,37 @@ class MainApp:
         else:
             raise ValueError(f"未知的Frame类型: {frame_key}")
 
-    def _on_content_configure(self, event):
-        """内容区域高度变化时更新Canvas滚动区域"""
-        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
-    def _on_canvas_configure(self, event):
-        """Canvas宽度变化时，同步拉伸内部content_frame宽度"""
-        self.canvas.itemconfig(self.canvas_window, width=event.width)
-
+# ============================================================
+# Step 4: 入口 —— 关闭 Splash → 打开主窗口
+# ============================================================
 
 def main():
-    """主函数"""
+    _set_progress(85, "正在构建主界面 ...")
     root = ctk.CTk()
     app = MainApp(root)
+
+    # ============================================================
+    # 关键修复：销毁 splash 前，把主窗口设为 tkinter 的默认 root
+    #
+    # 原因：splash 用独立的 tk.Tk()，主窗口 ctk.CTk() 是另一个 Tk 实例。
+    # _splash.destroy() 时其 Tcl 解释器被销毁，tkinter 会把
+    # _default_root 重置为 None。后续若调用 tk.StringVar()（不带 master）
+    # 会报 "Too early to create variable: no default root window"。
+    # 显式赋值后，主窗口成为唯一的 default root。
+    # ============================================================
+    tk._default_root = root
+
+    # 进度到 100%，并短暂停留让用户看到"启动完成"
+    _set_progress(100, "启动完成")
+    _splash.update()
+    import time as _time
+    _time.sleep(0.4)
+
+    # 关闭 splash，聚焦主窗口
+    _splash.destroy()
+    root.lift()
+    root.focus_force()
 
     root.mainloop()
 

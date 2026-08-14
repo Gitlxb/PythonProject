@@ -6,6 +6,7 @@ Word 文档合并工具 — 分类层级合并引擎（word_core_hyp2.py）
   1. 关键词提取（带 parent 一级标题）
      - 0-X 分数模式: 提取关键词 + 左侧合并单元格中的"类别名"
      - 主观回退: 提取关键词 + 左侧"类别名" + 顿号拆分
+     - 满分值模式: 动态列探测 + 文本清洗
   2. 智能搜索（精准 → 模糊 两级）
      - 先精准匹配（文件名包含完整关键词）
      - 未命中则模糊匹配（4字分块组合）
@@ -207,6 +208,249 @@ def _detect_parent_col(row, keyword_col_index, keyword_is_subjective=False):
     # 取文字最短的；同长取最靠左的
     candidates.sort(key=lambda x: (x[1], x[0]))
     return candidates[0][0]
+
+
+# ============================================================
+#  满分值模式辅助 — 动态列探测
+# ============================================================
+
+def _is_table_header_row(row, score_col):
+    """
+    判断某行是否为表头行。
+
+    判定策略（任一命中即视为表头）:
+      1. 任何单元格含典型表头关键词（满分/评审项目/评分/序号等）
+      2. 分数列单元格的文本为"满分/分值"等表头词（非数字+分）
+      3. parent 列单元格文本长度 ≤ 5 且不含分号/顿号/冒号
+
+    返回: True 表示该行是表头，应跳过。
+    """
+    # 表头关键词集合（常见评标办法表格表头）
+    header_keywords = {
+        '满分', '满分值', '分值', '评审项目', '评·分·内·容', '评 分 内 容',
+        '评审内容', '评审标准', '评审要求', '评审因素', '评审因素及分值',
+        '评分内容', '评分标准', '评分细则', '评分要求', '评分项目',
+        '评分因素', '序号', '号', '评审指标', '评审要点',
+    }
+    # 表头行的常见短词特征
+    header_short_words = {'评审', '评分', '标准', '因素', '指标', '项目'}
+
+    for ci, cell in enumerate(row.cells):
+        text = cell.text.strip()
+        if not text:
+            continue
+
+        # 完整表头词命中
+        if text in header_keywords:
+            return True
+
+        # 含典型表头关键词（如"评·分·内·容"）
+        for kw in header_keywords:
+            if kw in text and len(text) <= len(kw) + 2:
+                return True
+
+        # 分数列单元格的非数字+分（如"满分值"）
+        if ci == score_col:
+            if not re.match(r'^\s*\d+(\.\d+)?\s*分\s*$', text):
+                # 非数字+分格式 — 很可能是表头
+                if any(c in text for c in '满分分值') or len(text) <= 5:
+                    return True
+
+        # 短文本特征（≤5字）+ 不含典型正文符号
+        if (2 <= len(text) <= 5
+                and not any(c in text for c in '：:；;、，。.\n')
+                and any(w in text for w in header_short_words)):
+            return True
+
+    return False
+
+
+def _detect_score_column(table):
+    """
+    动态探测表格的"满分值"列。
+
+    策略: 遍历所有行，统计每列中匹配 r'^\\s*\\d+(\\.\\d+)?\\s*分\\s*$'
+          的非空单元格数量，取命中数最多的列作为分数列。
+    要求: 该列的命中行数占非空行数的比例 ≥ 50%。
+
+    返回: (score_col_index: int | None, score_col_reliable: bool)
+    """
+    num_cols = max(len(row.cells) for row in table.rows)
+    if num_cols == 0:
+        return None
+
+    col_hits = [0] * num_cols
+    col_non_empty = [0] * num_cols
+    score_re = re.compile(r'^\s*\d+(\.\d+)?\s*分\s*$')
+
+    for row in table.rows:
+        for ci in range(min(len(row.cells), num_cols)):
+            text = row.cells[ci].text.strip()
+            if text:
+                col_non_empty[ci] += 1
+                if score_re.match(text):
+                    col_hits[ci] += 1
+
+    if not any(col_hits):
+        return None
+
+    # 取命中数最多的列
+    best_col = max(range(num_cols), key=lambda ci: col_hits[ci])
+    if col_hits[best_col] == 0:
+        return None
+
+    # 可靠性检查: 至少 50% 的非空行命中
+    total_non_empty = col_non_empty[best_col]
+    ratio = col_hits[best_col] / max(total_non_empty, 1)
+    return best_col
+
+
+def _detect_keyword_and_parent_columns(table, score_col):
+    """
+    从分数列出发，向左动态探测关键词列和 parent 列。
+
+    关键词列 = 分数列左侧最近的非空文本列
+    parent 列 = 关键词列左侧最近的"短文本列"（平均长度 < 15、无冒号）
+
+    返回: (keyword_col: int | None, parent_col: int | None)
+    """
+    if score_col is None:
+        return None, None
+
+    rows = table.rows
+    num_rows = len(rows)
+
+    def _col_is_non_empty(ci):
+        return any(
+            ci < len(rows[ri].cells) and rows[ri].cells[ci].text.strip()
+            for ri in range(num_rows)
+        )
+
+    def _col_is_short_text(ci):
+        """父级列判定: 平均长度 < 15, 无冒号, 无纯数字分数。"""
+        texts = []
+        for ri in range(num_rows):
+            if ci >= len(rows[ri].cells):
+                continue
+            t = rows[ri].cells[ci].text.strip()
+            if t:
+                texts.append(t)
+        if not texts:
+            return False
+        avg_len = sum(len(t) for t in texts) / len(texts)
+        if avg_len >= 15:
+            return False
+        # 排除含冒号的列（那是关键词描述列）
+        if any('：' in t or ':' in t for t in texts):
+            return False
+        return True
+
+    # 关键词列: 分数列左侧最近的非空列
+    keyword_col = None
+    for ci in range(score_col - 1, -1, -1):
+        if _col_is_non_empty(ci):
+            keyword_col = ci
+            break
+
+    # parent 列: 关键词列左侧最近的短文本列
+    parent_col = None
+    if keyword_col is not None:
+        for ci in range(keyword_col - 1, -1, -1):
+            if _col_is_short_text(ci):
+                parent_col = ci
+                break
+
+    return keyword_col, parent_col
+
+
+# ============================================================
+#  满分值模式辅助 — 关键词文本清洗
+# ============================================================
+
+def _clean_keyword_text(text):
+    """
+    从满分值模式的关键词单元格中清洗出纯净关键词。
+
+    清洗顺序（由粗到细）:
+      1. 按换行拆分，取第一段（去除子项列表）
+      2. 剥离评分细则后缀（"由评委打分（...）。" 等）
+      3. 剥离最高得分说明（"每提供一个...最高得X分。"）
+      4. 剥离说明注脚（"说明：...。"）
+      5. 尾部标点/括号去除
+      6. 质量判定: 长度 ≥ 4 且非纯数字
+
+    返回: 清洗后的关键词文本, 或 None（不可用）
+    """
+    if not text or not text.strip():
+        return None
+
+    text = text.strip()
+
+    # ---- 1) 取"第一段核心内容" ----
+    # 若有冒号 + 换行 → 可能是子项列表（如 "关键词：\n1、...\n2、..."）
+    # 这种情况下只取冒号前的内容
+    colon_idx = -1
+    for ch in ('：', ':'):
+        idx = text.find(ch)
+        if idx != -1 and (colon_idx == -1 or idx < colon_idx):
+            colon_idx = idx
+
+    if colon_idx != -1:
+        after_colon = text[colon_idx + 1:]
+        # 如果冒号后紧跟换行 + 数字序号起始 → 认为冒号后是子项列表
+        if re.match(r'\s*[\n\r]+\s*[1-9（(][）).、\uFF0E]', after_colon):
+            text = text[:colon_idx].strip()
+        # 如果冒号后跟换行 + 非序号文本 → 仍尝试取冒号前（保守截断）
+        elif re.match(r'\s*[\n\r]+', after_colon):
+            text = text[:colon_idx].strip()
+
+    # ---- 2) 剥离评分细则后缀 ----
+    # 匹配: "，由评委打分（5、4、3、2、1、0分）。" 及其变体
+    text = re.sub(
+        r'[，,]\s*由评委[^\u3002。\n]*[。\.]',
+        '',
+        text
+    )
+    # 匹配: "，评委打分...。" （无"由"字的变体）
+    text = re.sub(
+        r'[，,]\s*评委[^\u3002。\n]*[。\.]',
+        '',
+        text
+    )
+
+    # ---- 3) 剥离最高得分说明 ----
+    # 匹配: "，每提供一个得0.5分,最高得1分。" "，每...最高得X分。"
+    text = re.sub(
+        r'[，,]\s*每提供[^\u3002。\n]*?最高得\d+分?[\.\u3002。]',
+        '',
+        text
+    )
+    # 匹配: "，最高得X分。" 级别的简短后缀
+    text = re.sub(
+        r'[，,]\s*最高得\d+分?[\.\u3002。]',
+        '',
+        text
+    )
+
+    # ---- 4) 剥离说明注脚 ----
+    # 匹配: "说明：...。"  "说明:...。"
+    text = re.sub(
+        r'[。；;]\s*说明[：:][^\u3002。]*[。\.]',
+        '',
+        text
+    )
+
+    # ---- 5) 尾部清理（复用现有规则）----
+    text = re.sub(r'[；;、，,。\.]+$', '', text)
+    text = re.sub(r'[（(][^）)]*[）)]\s*$', '', text).strip()
+
+    # ---- 6) 质量判定 ----
+    if not text or len(text) < 4:
+        return None
+    if re.match(r'^\s*\d+(\.[0-9]+)?\s*分?\s*$', text):
+        return None  # 纯数字+分 — 是评分而非关键词
+
+    return text
 
 
 # ============================================================
@@ -485,6 +729,118 @@ def _extract_subjective_categories(doc, log_callback=None):
 
 
 # ============================================================
+#  关键词提取 v2 — 满分值模式（动态列探测 + 文本清洗）
+# ============================================================
+
+def _extract_maxscore_categories(doc, log_callback=None):
+    """
+    三级检测（新增）：从"满分值"表格模式中提取分类关键词。
+
+    锚点: 最后一列"满分值"（数字+分）
+    关键词: 分数列左侧最近的非空列（经 _clean_keyword_text 清洗）
+    parent: 关键词列左侧最近的"短文本列"（2~20 字）
+
+    特点:
+      - 动态列探测（不硬编码 col-1 / col-2）
+      - 关键词单元格经清洗管线去除评分细则/子项/说明
+      - 按 parent 合并关键词（同 parent 多行 → 合并关键词）
+
+    参数:
+        doc:          已加载的 Document 对象
+        log_callback: 可选的日志回调
+    返回:
+        categories: list[dict] — [{"parent":..., "type":"maxscore", "keywords":[...]}, ...]
+    """
+    def log(msg):
+        if log_callback:
+            log_callback(msg)
+
+    parent_kw_map = {}  # {parent: set(keywords)}
+    parent_order = []
+
+    for table_idx, table in enumerate(doc.tables):
+        # ---- 阶段 A: 动态探测列位置 ----
+        score_col = _detect_score_column(table)
+        if score_col is None:
+            continue  # 该表无满分值模式
+
+        keyword_col, parent_col = _detect_keyword_and_parent_columns(
+            table, score_col)
+
+        if keyword_col is None:
+            log(f"  [三级·满分值] 表 {table_idx + 1}: 找到分数列但未找到关键词列，跳过")
+            continue
+
+        log(f"  [三级·满分值] 表 {table_idx + 1}: "
+            f"score_col={score_col}, keyword_col={keyword_col}, parent_col={parent_col}")
+
+        # ---- 阶段 B: 逐行提取关键词 ----
+        last_parent_text = None  # 用于合并单元格回退
+
+        for ri, row in enumerate(table.rows):
+            cells = row.cells
+
+            # 跳过表头行（含"评审项目/满分/评分"等表头词的行）
+            if _is_table_header_row(row, score_col):
+                log(f"  [三级·满分值] 表 {table_idx + 1}: 跳过表头行 (ri={ri})")
+                continue
+
+            # 读取关键词列文本
+            if keyword_col >= len(cells):
+                continue
+            raw_text = cells[keyword_col].text.strip()
+            if not raw_text:
+                continue
+
+            # 清洗关键词
+            keyword = _clean_keyword_text(raw_text)
+            if not keyword:
+                continue
+
+            # 获取 parent 值
+            parent_text = None
+            if parent_col is not None and parent_col < len(cells):
+                parent_text = cells[parent_col].text.strip()
+
+            # 合并单元格回退: 当前行 parent 为空 → 继承上一行的 parent
+            if not parent_text and last_parent_text:
+                parent_text = last_parent_text
+
+            if not parent_text:
+                # 无 parent → 用关键词自身作为 parent
+                parent_text = keyword
+
+            # 更新 last_parent（非空才更新，避免覆盖空值）
+            if parent_col is not None and parent_col < len(cells) and cells[parent_col].text.strip():
+                last_parent_text = cells[parent_col].text.strip()
+
+            # 归类
+            if parent_text not in parent_kw_map:
+                parent_kw_map[parent_text] = set()
+                parent_order.append(parent_text)
+
+            parent_kw_map[parent_text].add(keyword)
+            log(f"  ✓ [三级·满分值] {parent_text} ← {keyword}")
+
+    # 组装返回
+    categories = []
+    for parent in parent_order:
+        categories.append({
+            "parent": parent,
+            "type": "maxscore",
+            "keywords": list(parent_kw_map[parent]),
+        })
+
+    if categories:
+        total_kws = sum(len(c["keywords"]) for c in categories)
+        log(f"  [三级·满分值] 共 {len(categories)} 个类别, {total_kws} 个关键词")
+    else:
+        log("  [三级·满分值] 未命中")
+
+    return categories
+
+
+# ============================================================
 #  关键词提取 v2 — 主入口
 # ============================================================
 
@@ -492,10 +848,10 @@ def extract_categories_from_document(doc_path, log_callback=None):
     """
     从评标办法文档中提取分类关键词。
 
-    检测顺序:
-      一级: 0-X 分数模式 → 提取 parent + keywords
-      二级: 主观回退      → 提取 parent + keywords（含顿号拆分）
-    两级独立执行，结果合并。
+    检测顺序（独立并行，结果合并）:
+      一级: 0-X 分数模式   → 提取 parent + keywords
+      二级: 主观回退        → 提取 parent + keywords（含顿号拆分）
+      三级: 满分值模式       → 提取 parent + keywords（动态列探测 + 文本清洗）
 
     返回:
         (success: bool, categories: list[dict] | error_msg: str)
@@ -521,10 +877,14 @@ def extract_categories_from_document(doc_path, log_callback=None):
     log("  [二级] '主观'回退（分类提取）")
     subjective_cats = _extract_subjective_categories(doc, log_callback=log)
 
-    # ---- 合并两级结果（按 parent 合并）----
+    # ---- 三级: 满分值模式（新增）----
+    log("  [三级] '满分值'模式（动态列探测）")
+    maxscore_cats = _extract_maxscore_categories(doc, log_callback=log)
+
+    # ---- 合并三级结果（按 parent 合并）----
     all_cats = {}
     cat_order = []
-    for cat in score_cats + subjective_cats:
+    for cat in score_cats + subjective_cats + maxscore_cats:
         parent = cat["parent"]
         if parent not in all_cats:
             all_cats[parent] = {"parent": parent, "type": cat["type"], "keywords": set()}
@@ -541,8 +901,8 @@ def extract_categories_from_document(doc_path, log_callback=None):
         })
 
     if not categories:
-        log("  [警告] 两级检测均未找到可用关键词")
-        return False, '文档中未找到包含"0-X分"或"主观"评分标准的行，无法提取关键词'
+        log("  [警告] 三级检测均未找到可用关键词")
+        return False, '文档中未找到包含"0-X分"、"主观"或"满分值"评分标准的行，无法提取关键词'
 
     total_kws = sum(len(c["keywords"]) for c in categories)
     log(f"  共提取 {len(categories)} 个类别, {total_kws} 个不重复关键词")

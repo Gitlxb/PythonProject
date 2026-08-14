@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-人事功能模块 - 5个功能
+人事功能模块 - 4个功能
 使用CustomTkinter实现的现代化UI
 1. 拆分_拆分两次_在职离职 (吴苏霞)
 2. 拆分_指定内容放一起_拆分参数 (吴苏霞)
@@ -26,6 +26,7 @@ from hr.rs_gzb_pipei_main import SalaryMatchApp
 
 # 文档处理统一工具箱（hr/hyp/ 子包）
 from hr.hyp.unified_hr_tools import UnifiedHRTools
+from ui_components import FunctionCard, Theme
 
 
 class HRFrame(ctk.CTkFrame):
@@ -34,122 +35,86 @@ class HRFrame(ctk.CTkFrame):
     def __init__(self, parent, status_var=None):
         super().__init__(parent, fg_color="white", corner_radius=0)
         self.status_var = status_var or tk.StringVar()
+        self._cards = []
         self._build_ui()
 
     def _build_ui(self):
         """构建UI"""
-        # 标题区
+        # ---- 标题区 ----
         title_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
-        title_frame.pack(fill="x", padx=30, pady=(25, 15))
+        title_frame.pack(fill="x", padx=Theme.SPACING_XL, pady=(Theme.SPACING_LG, Theme.SPACING_MD))
 
-        title_label = ctk.CTkLabel(
+        ctk.CTkLabel(
             title_frame,
             text="👥 人事工具",
-            font=("Microsoft YaHei", 20, "bold"),
-            text_color="#e67e22"
-        )
-        title_label.pack(anchor="w")
+            font=Theme.FONT_HEADING,
+            text_color=Theme.COLOR_ACCENT_HR
+        ).pack(anchor="w")
 
-        desc_label = ctk.CTkLabel(
+        ctk.CTkLabel(
             title_frame,
             text="在职离职拆分、指定内容参数拆分等人事数据处理",
-            font=("Microsoft YaHei", 12),
-            text_color="#666666"
+            font=Theme.FONT_BODY,
+            text_color=Theme.COLOR_TEXT_SECONDARY
+        ).pack(anchor="w", pady=(Theme.SPACING_XS, 0))
+
+        # ---- 卡片网格容器 ----
+        self._cards_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
+        self._cards_frame.pack(fill="both", expand=True,
+                               padx=Theme.SPACING_XL, pady=(0, Theme.SPACING_LG))
+
+        # ---- 4个功能卡片 ----
+        self._add_card("1、拆分_拆分两次_在职离职",
+                       "按条件拆分在职/离职人员数据（吴苏霞）",
+                       "✂️", Theme.COLOR_ACCENT_HR, self.rszy_cf_lc)
+
+        self._add_card("2、拆分_指定内容放一起_拆分参数",
+                       "将指定内容归集到一起并拆分参数（吴苏霞）",
+                       "📌", Theme.COLOR_ACCENT_HR, self.rszy_cf_cfcs_wsx)
+
+        self._add_card("3、工资表匹配",
+                       "两张工资表数据对比与高亮标记差异",
+                       "🔍", Theme.COLOR_ACCENT_HR, self.open_gzb_pipei)
+
+        self._add_card("4、文档处理工具箱",
+                       "工资表拆分（保留公式/样式）+ Word智能合并，统一界面操作",
+                       "📦", Theme.COLOR_ACCENT_GENERAL, self.open_unified_tools)
+
+        # 初始布局 + resize 绑定
+        self._layout_cards()
+        self._cards_frame.bind("<Configure>", self._on_resize)
+
+    # ============================================================
+    # 卡片管理
+    # ============================================================
+
+    def _add_card(self, title, desc, icon, color, command):
+        card = FunctionCard(
+            self._cards_frame,
+            title=title, description=desc, icon=icon,
+            color=color, command=command
         )
-        desc_label.pack(anchor="w", pady=(5, 0))
+        self._cards.append(card)
 
-        # 功能卡片容器
-        cards_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
-        cards_frame.pack(fill="both", expand=True, padx=30, pady=(0, 20))
+    def _layout_cards(self):
+        width = self._cards_frame.winfo_width()
+        cols = 2 if width > Theme.CARD_GRID_BREAKPOINT else 1
 
-        # === 3个功能卡片 ===
-        self._create_card(cards_frame,
-                          title="1、拆分_拆分两次_在职离职",
-                          desc="按条件拆分在职/离职人员数据（吴苏霞）",
-                          icon="✂️",
-                          command=self.rszy_cf_lc,
-                          color="#e67e22")
+        for c in range(cols):
+            self._cards_frame.grid_columnconfigure(c, weight=1, uniform="card_col")
 
-        self._create_card(cards_frame,
-                          title="2、拆分_指定内容放一起_拆分参数",
-                          desc="将指定内容归集到一起并拆分参数（吴苏霞）",
-                          icon="📌",
-                          command=self.rszy_cf_cfcs_wsx,
-                          color="#e67e22")
+        for i, card in enumerate(self._cards):
+            row, col = divmod(i, cols)
+            card.grid(row=row, column=col,
+                      padx=Theme.SPACING_XS, pady=Theme.SPACING_XS, sticky="ew")
 
-        self._create_card(cards_frame,
-                          title="3、工资表匹配",
-                          desc="两张工资表数据对比与高亮标记差异",
-                          icon="🔍",
-                          command=self.open_gzb_pipei,
-                          color="#e67e22")
+    def _on_resize(self, event):
+        if event.widget == self._cards_frame:
+            self._layout_cards()
 
-        self._create_card(cards_frame,
-                          title="4、文档处理工具箱",
-                          desc="工资表拆分（保留公式/样式）+ Word智能合并，统一界面操作",
-                          icon="📦",
-                          command=self.open_unified_tools,
-                          color="#27ae60")
-
-    def _create_card(self, parent, title, desc, icon, command, color):
-        """创建功能卡片"""
-        card = ctk.CTkFrame(
-            parent,
-            fg_color="#fafafa",
-            corner_radius=10,
-            border_width=1,
-            border_color="#eeeeee"
-        )
-        card.pack(fill="x", pady=8)
-
-        inner = ctk.CTkFrame(card, fg_color="transparent", corner_radius=0)
-        inner.pack(fill="x", padx=20, pady=15)
-
-        # 左侧图标+文字
-        left = ctk.CTkFrame(inner, fg_color="transparent", corner_radius=0)
-        left.pack(side="left", fill="both", expand=True)
-
-        title_text = tk.Label(
-            left,
-            text=f"{icon} {title}",
-            font=("Microsoft YaHei", 14, "bold"),
-            fg="#333333",
-            bg="#fafafa",
-            anchor="w",
-            justify="left"
-        )
-        title_text.pack(anchor="w", fill="x")
-
-        desc_text = tk.Label(
-            left,
-            text=desc,
-            font=("Microsoft YaHei", 11),
-            fg="#888888",
-            bg="#fafafa",
-            anchor="w",
-            justify="left",
-            wraplength=500
-        )
-        desc_text.pack(anchor="w", fill="x", pady=(5, 0))
-
-        # 右侧按钮
-        btn = ctk.CTkButton(
-            inner,
-            text="▶ 运行",
-            font=("Microsoft YaHei", 12),
-            fg_color=color,
-            hover_color="#d35400",
-            text_color="white",
-            corner_radius=8,
-            width=100,
-            height=36,
-            command=command
-        )
-        btn.pack(side="right", padx=(15, 0))
-
-        return card
-
-    # ---- 功能方法 ----
+    # ============================================================
+    # 业务方法
+    # ============================================================
 
     def rszy_cf_lc(self):
         """拆分_拆分两次_在职离职"""
@@ -201,8 +166,6 @@ class HRFrame(ctk.CTkFrame):
             window.title("📦 人事文档处理工具箱")
             window.geometry("1200x800")
             window.minsize(900, 650)
-            window.transient(parent)
-            # 不 grab_set — 让用户可以同时操作主窗口
             app = UnifiedHRTools(parent=window)
             self.status_var.set("已打开：文档处理工具箱（工资表拆分 + Word合并）")
             window.lift()

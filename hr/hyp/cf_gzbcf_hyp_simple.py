@@ -8,6 +8,19 @@ from copy import copy
 from tkinter import filedialog, messagebox, ttk
 
 from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
+
+
+# 个税公式依赖字段 -> 候选表头关键字（按优先级匹配，越靠前越具体）
+# 公式结构：=-ROUND(MAX((税前工资 - 5000 - 专项附加扣除 - 通讯费 + 社保个人扣款 + 公积金扣款-个人) * {3,10,20,25,30,35,45}% - 5*{0,42,282,532,882,1432,3032}, 0), 2)
+# 说明：各字段实际列号随模板布局变化，运行时按表头名动态定位；「通讯费」亦作为减项参与计算。
+TAX_FORMULA_FIELD_HEADERS = {
+    "taxable_base": ["税前工资", "应发工资", "应纳税所得额", "应发", "工资基数"],           # 公式首项（被减数 · 税基）
+    "subtract_deduction": ["专项附加扣除", "专项附加"],                                     # 减项：专项附加扣除
+    "subtract_allowance": ["通讯费", "通讯补贴", "电话费"],                                # 减项：通讯费
+    "add_social": ["社保个人扣款", "社保个人"],                                             # 加项：社保个人扣款
+    "add_fund": ["公积金扣款-个人", "公积金扣款", "公积金个人扣款", "公积金个人"],           # 加项：公积金扣款-个人
+}
 
 
 class SplitGroupDialog(tk.Toplevel):
@@ -21,11 +34,42 @@ class SplitGroupDialog(tk.Toplevel):
         self.grab_set()
         self.resizable(False, False)
 
+        # 修复 Win+D 最小化后 Alt+Tab 无法恢复、界面卡死（只能任务管理器强杀）的问题：
+        # grab_set() 在窗口最小化后仍占用输入，恢复时主窗口可见但输入被重定向到不可见的对话框。
+        # 这里在最小化(Unmap)时释放 grab，恢复(Map)时重建 grab 并置顶。
+        self._grab_active = True
+        self.bind("<Unmap>", self._on_unmap)
+        self.bind("<Map>", self._on_map)
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+
         self.all_values = list(all_values)
         self.groups = []  # 已创建的组合，每个元素是成员列表
         self.result = None
 
         self._build_ui()
+
+    def _on_unmap(self, event):
+        """窗口被最小化/隐藏时释放 grab，避免主窗口被不可见的模态对话框挡住。"""
+        if self._grab_active:
+            try:
+                self.grab_release()
+            except tk.TclError:
+                pass
+            self._grab_active = False
+
+    def _on_map(self, event):
+        """窗口重新显示时重建 grab 并置顶，恢复模态。"""
+        if not self._grab_active:
+            try:
+                self.grab_set()
+            except tk.TclError:
+                pass
+            self._grab_active = True
+        try:
+            self.lift()
+            self.focus_force()
+        except tk.TclError:
+            pass
 
     def _build_ui(self):
         tk.Label(
@@ -166,6 +210,10 @@ class SplitExcelApp:
 
         self.parent = parent
 
+        # 弹窗父窗口：嵌入模式用 parent（容器），独立模式用 root
+        # 统一使用此属性可避免 Windows 把 host 主窗口拉到最前遮挡操作界面
+        self._dialog_parent = parent if parent is not None else self.root
+
         # 业务数据
         self.filepath = ""
         self.wb = None
@@ -237,11 +285,11 @@ class SplitExcelApp:
     def _open_group_dialog(self):
         """打开选择拆分组合弹窗"""
         if not self.wb or not self.ws:
-            messagebox.showwarning("提示", "请先选择Excel文件和工作表，并选择拆分依据列。")
+            messagebox.showwarning("提示", "请先选择Excel文件和工作表，并选择拆分依据列。", parent=self._dialog_parent)
             return
         col_text = self.combo_col.get()
         if not col_text:
-            messagebox.showwarning("提示", "请先选择拆分依据列。")
+            messagebox.showwarning("提示", "请先选择拆分依据列。", parent=self._dialog_parent)
             return
         self.split_col_idx = int(col_text.split(".")[0])
 
@@ -260,10 +308,10 @@ class SplitExcelApp:
                     all_values.append(dept)
 
         if not all_values:
-            messagebox.showwarning("提示", "未找到可拆分的值。")
+            messagebox.showwarning("提示", "未找到可拆分的值。", parent=self._dialog_parent)
             return
 
-        dialog = SplitGroupDialog(self.root, all_values)
+        dialog = SplitGroupDialog(self._dialog_parent, all_values)
         self.root.wait_window(dialog)
 
         if dialog.result is not None:
@@ -272,12 +320,12 @@ class SplitExcelApp:
             for g in self.selected_groups:
                 group_desc.append("+".join(g))
             self._log(f"已设置组合: {', '.join(group_desc)}")
-            messagebox.showinfo("选择拆分", f"已创建 {len(self.selected_groups)} 个组合，未选择的值将单独拆分。")
+            messagebox.showinfo("选择拆分", f"已创建 {len(self.selected_groups)} 个组合，未选择的值将单独拆分。", parent=self._dialog_parent)
 
     def _open_output_dir(self):
         """打开拆分输出目录"""
         if not self.output_dir or not os.path.exists(self.output_dir):
-            messagebox.showwarning("提示", "暂无输出目录，请先执行拆分操作。")
+            messagebox.showwarning("提示", "暂无输出目录，请先执行拆分操作。", parent=self._dialog_parent)
             return
         try:
             if os.name == 'nt':
@@ -287,10 +335,10 @@ class SplitExcelApp:
             else:
                 subprocess.run(['xdg-open', self.output_dir])
         except Exception as e:
-            messagebox.showerror("错误", f"无法打开输出目录:\n{e}")
+            messagebox.showerror("错误", f"无法打开输出目录:\n{e}", parent=self._dialog_parent)
 
     def _choose_file(self):
-        path = filedialog.askopenfilename(filetypes=[("Excel文件", "*.xlsx")])
+        path = filedialog.askopenfilename(filetypes=[("Excel文件", "*.xlsx")], parent=self._dialog_parent)
         if not path:
             if self.parent is None:
                 self.root.lift()
@@ -310,7 +358,7 @@ class SplitExcelApp:
             # 重置组合选择
             self.selected_groups = None
         except Exception as e:
-            messagebox.showerror("错误", f"无法加载文件:\n{e}")
+            messagebox.showerror("错误", f"无法加载文件:\n{e}", parent=self._dialog_parent)
         finally:
             if self.parent is None:
                 self.root.lift()
@@ -359,6 +407,42 @@ class SplitExcelApp:
                 if txt not in ("合计", "总计", "汇总", "小计", "平均"):
                     last_data_row = r
         return last_data_row + 1
+
+    def _match_tax_header(self, header_to_col, candidates):
+        """在 表头->列号 映射中按候选关键字定位列号。
+
+        匹配策略：先精确匹配（表头完全等于候选），再包含匹配（候选为表头子串）。
+        包含匹配时优先选择「候选词更长、命中表头更短」的组合，以降低误匹配。
+        """
+        # 1) 精确匹配
+        for cand in candidates:
+            if cand in header_to_col:
+                return header_to_col[cand]
+        # 2) 包含匹配：以 (候选长度, -表头长度) 为优先级，越大越优先
+        best = None  # (score, col)
+        for header, col in header_to_col.items():
+            for cand in candidates:
+                if cand in header:
+                    score = (len(cand), -len(header))
+                    if best is None or score > best[0]:
+                        best = (score, col)
+                    break
+        return best[1] if best else None
+
+    def _resolve_tax_formula_columns(self, ws, max_col):
+        """根据第2行表头，定位个税公式各语义字段的实际列号。
+
+        返回 dict：字段名 -> 列号(int) 或 None(未找到)。
+        """
+        header_to_col = {}
+        for c in range(1, max_col + 1):
+            val = ws.cell(2, c).value
+            if val is not None:
+                header_to_col[str(val).strip()] = c
+        return {
+            field: self._match_tax_header(header_to_col, candidates)
+            for field, candidates in TAX_FORMULA_FIELD_HEADERS.items()
+        }
 
     def _copy_cell_style(self, src, dst):
         if not src.has_style:
@@ -414,12 +498,12 @@ class SplitExcelApp:
 
     def _start_split(self):
         if not self.filepath or not self.ws:
-            messagebox.showwarning("提示", "请先选择Excel文件和工作表")
+            messagebox.showwarning("提示", "请先选择Excel文件和工作表", parent=self._dialog_parent)
             return
 
         col_text = self.combo_col.get()
         if not col_text:
-            messagebox.showwarning("提示", "请选择拆分依据列")
+            messagebox.showwarning("提示", "请选择拆分依据列", parent=self._dialog_parent)
             return
 
         self.split_col_idx = int(col_text.split(".")[0])
@@ -428,14 +512,15 @@ class SplitExcelApp:
         max_row = self.ws.max_row
 
         if suggested_footer > max_row:
-            messagebox.showinfo("提示", "未检测到表尾，所有行将被视为数据行")
+            messagebox.showinfo("提示", "未检测到表尾，所有行将被视为数据行", parent=self._dialog_parent)
             self.footer_start = max_row + 1
         else:
             confirm = messagebox.askyesno(
                 "确认表尾",
                 f"检测到数据区域: 第3行 ~ 第{suggested_footer - 1}行\n"
                 f"表尾起始行: 第{suggested_footer}行 (共 {max_row - suggested_footer + 1} 行)\n\n"
-                f"是否确认并开始拆分？"
+                f"是否确认并开始拆分？",
+                parent=self._dialog_parent
             )
             if not confirm:
                 return
@@ -461,7 +546,7 @@ class SplitExcelApp:
                     self.dept_rows[dept].append(r)
 
         if not self.dept_order:
-            messagebox.showwarning("提示", "未找到有效的拆分值")
+            messagebox.showwarning("提示", "未找到有效的拆分值", parent=self._dialog_parent)
             return
 
         # 根据用户选择构建分组
@@ -595,7 +680,7 @@ class SplitExcelApp:
                     ws_new.merge_cells(start_row=new_min_row, start_column=mc_min_col,
                                        end_row=new_max_row, end_column=mc_max_col)
 
-            # 为"个税"列填充固定公式
+            # 为"个税"列动态填充公式：按表头名定位依赖列，避免换模板后列布局变化导致错位
             col_idx_map = {}
             for c in range(1, max_col + 1):
                 val = ws_new.cell(2, c).value
@@ -604,13 +689,29 @@ class SplitExcelApp:
 
             if "个税" in col_idx_map:
                 geshui_col = col_idx_map["个税"]
-                for r in range(3, new_data_last_row + 1):
-                    ws_new.cell(r, geshui_col).value = (
-                        f"=-ROUND(MAX((AK{r}-5000-AJ{r}-AT{r}+AM{r}+AN{r})"
-                        f"*{{3,10,20,25,30,35,45}}%"
-                        f"-5*{{0,42,282,532,882,1432,3032}},),2)"
+                tax_cols = self._resolve_tax_formula_columns(ws_new, max_col)
+                missing = [f for f, c in tax_cols.items() if c is None]
+                if not missing:
+                    tb = get_column_letter(tax_cols["taxable_base"])           # 税前工资（税基）
+                    sd = get_column_letter(tax_cols["subtract_deduction"])    # 专项附加扣除
+                    ea = get_column_letter(tax_cols["subtract_allowance"])    # 通讯费
+                    sp = get_column_letter(tax_cols["add_social"])            # 社保个人扣款
+                    fp = get_column_letter(tax_cols["add_fund"])              # 公积金扣款-个人
+                    for r in range(3, new_data_last_row + 1):
+                        ws_new.cell(r, geshui_col).value = (
+                            f"=-ROUND(MAX(({tb}{r}-5000-{sd}{r}-{ea}{r}+{sp}{r}+{fp}{r})"
+                            f"*{{3,10,20,25,30,35,45}}%"
+                            f"-5*{{0,42,282,532,882,1432,3032}},),2)"
+                        )
+                    self._log(
+                        f"  已动态填充'个税'列公式 → 税前工资[{tb}] 专项附加扣除[{sd}] "
+                        f"通讯费[{ea}] 社保个人扣款[{sp}] 公积金扣款-个人[{fp}]"
                     )
-                self._log(f"  已填充'个税'列公式（列{geshui_col}）")
+                else:
+                    self._log(
+                        f"  警告：个税依赖列未全部定位（缺失 {missing}），"
+                        f"保留原表'个税'列数值，未覆盖写入公式。"
+                    )
 
             # 调整公式
             new_max_row = ws_new.max_row
@@ -634,7 +735,7 @@ class SplitExcelApp:
             self._log(f"已生成: {new_filename} (数据行 {len(rows)} 条)")
 
         self._log("拆分完成!")
-        messagebox.showinfo("完成", f"拆分完成，共生成 {len(split_groups)} 个文件。")
+        messagebox.showinfo("完成", f"拆分完成，共生成 {len(split_groups)} 个文件。", parent=self._dialog_parent)
 
 
 def main():

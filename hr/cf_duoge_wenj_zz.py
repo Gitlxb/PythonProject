@@ -274,7 +274,8 @@ def split_worksheet_in_file(file_path, columns=None):
         if columns is None:
             columns_input = simpledialog.askstring(
                 "输入列字母",
-                f"请选择要拆分工作表 '{os.path.basename(file_path)}' 的列（字母，多个列用逗号分隔）："
+                f"请选择要拆分工作表 '{os.path.basename(file_path)}' 的列（字母，多个列用逗号分隔）：",
+                parent=root,
             )
             if not columns_input:
                 return
@@ -284,7 +285,7 @@ def split_worksheet_in_file(file_path, columns=None):
         # 验证列索引是否有效
         for col_idx in columns:
             if col_idx < 0 or col_idx >= len(df.columns):
-                messagebox.showerror("错误", f"列 '{get_column_letter(col_idx + 1)}' 不存在于文件中")
+                messagebox.showerror("错误", f"列 '{get_column_letter(col_idx + 1)}' 不存在于文件中", parent=root)
                 return
 
         # 创建新的工作簿
