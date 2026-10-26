@@ -79,10 +79,154 @@ def extract_month_from_filename(fname):
 
 
 # ============================================================
+# 输出列布局 (2026-10-26 对齐 VBA「按列名映射重写版」/ Java HbgsService)
+#   固定 19 列白名单 + 白名单外按邻列插入 + 忽略名单 + 尾部压缩
+# ============================================================
+
+_STD_COLUMNS = [
+    "文件名", "项目", "姓名", "身份证", "入职时间", "离职时间", "应发工资", "个税",
+    "预支扣款", "需扣回", "实发工资", "备注", "发薪单位", "联系电话", "社保", "公积金",
+    "手续费", "个税申报所属期", "采用/不采用",
+]
+
+# 忽略名单: 源表出现这些列名时整列跳过(不输出、不占列位)
+#   开户行   —— 手续费引擎从「员工信息-X月」表取
+#   发放公司 —— 不输出, 但 M 类双单位规则仍用它判定发薪单位
+#   电话号码 —— 与「联系电话」重复
+_IGNORE_COLUMNS = {"开户行", "发放公司", "电话号码"}
+
+# 尾部压缩时必须保留的列(即使整列为空)
+_KEEP_COLUMNS = {"文件名", "项目", "姓名", "身份证", "手续费"}
+
+_ALIAS = {
+    "个税扣款": "个税",
+    "入职日期": "入职时间",
+    "离职日期": "离职时间",
+    "发薪公司": "发薪单位",
+    "手机号": "联系电话",
+    "预支": "预支扣款",
+    "预支扣回": "预支扣款",
+}
+
+
+def alias_name(h):
+    """源表头 -> 标准列名: 别名归并 (与 VBA AliasName 等价)
+
+    注意: 「发放公司」「电话号码」【不归并】—— 它们要命中忽略名单整列跳过；
+         若归并成「发薪单位」「联系电话」, 跳过就失效了。
+    """
+    if h is None:
+        return ""
+    h = str(h)
+    if h in _ALIAS:
+        return _ALIAS[h]
+    if h.startswith("个税申报所属期"):
+        return "个税申报所属期"
+    return h
+
+
+def local_name(hdr_val):
+    """源表某列的表头 -> 本地列名; 返回 "" 表示无表头(该列跳过)"""
+    if hdr_val is None:
+        return ""
+    h = remove_spaces(str(hdr_val).strip())
+    if h == "":
+        return ""
+    h = alias_name(h)
+    # 与生成列同名的源列 -> 加「(源)」后缀另立一列
+    if h in ("文件名", "项目", "手续费", "采用/不采用"):
+        h = h + "(源)"
+    return h
+
+
+def _index_of(names):
+    """列名表 -> {列名: 1-based 列号}"""
+    return {n: i + 1 for i, n in enumerate(names)}
+
+
+def _column_has_data(rows, col0):
+    """该列(0-based)在数据行中是否有非空值"""
+    for r in rows:
+        if col0 < len(r):
+            v = r[col0]
+            if v is not None and remove_spaces(str(v)) != "":
+                return True
+    return False
+
+
+def _id_text(v):
+    """身份证文本化: 空保持空; 数值转全位数字符串(防 18 位变科学计数法)"""
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return str(v)
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, float):
+        return str(int(v)) if v == int(v) else str(v)
+    s = str(v)
+    return s if s != "" else None
+
+
+def _resolve_insert_pos(loc, s, src_cols, u_dict, u_names):
+    """新列插入位置 (与 VBA SyncUnion 等价): 左右邻相邻→插中间; 否则以左邻为准"""
+    p_name = ""
+    n_name = ""
+    for j in range(s - 1, 1, -1):
+        if loc[j] and loc[j] in u_dict:
+            p_name = loc[j]
+            break
+    for j in range(s + 1, src_cols + 1):
+        if loc[j] and loc[j] in u_dict:
+            n_name = loc[j]
+            break
+    if p_name and n_name:
+        p_idx, n_idx = u_dict[p_name], u_dict[n_name]
+        if n_idx == p_idx + 1:
+            return p_idx + 1
+        return p_idx + 1 if n_idx > p_idx else n_idx
+    if p_name:
+        return u_dict[p_name] + 1
+    if n_name:
+        return u_dict[n_name]
+    return len(u_names) if u_names[-1] == "采用/不采用" else len(u_names) + 1
+
+
+def _compact_tail(u_names, rows):
+    """列尾压缩 (与 VBA CompactTailColumns 等价)
+
+    删除「最后一个有效列」右侧的空列, 使「采用/不采用」紧跟数据。
+    只裁尾部 —— 中间空列保留, 保证跨月列序稳定。
+    返回删除的列数。
+    """
+    if "采用/不采用" not in u_names:
+        return 0
+    tag_idx = u_names.index("采用/不采用") + 1          # 1-based
+    if tag_idx <= 1 or tag_idx != len(u_names):
+        return 0
+    last_data = 0
+    for c in range(tag_idx - 1, 0, -1):
+        nm = u_names[c - 1]
+        if nm in _KEEP_COLUMNS:
+            last_data = c
+            break
+        if _column_has_data(rows, c - 1):
+            last_data = c
+            break
+    if last_data == 0 or last_data >= tag_idx - 1:
+        return 0
+    removed = tag_idx - 1 - last_data
+    del u_names[last_data:tag_idx - 1]
+    for r in rows:
+        del r[last_data:tag_idx - 1]
+    return removed
+
+
+# ============================================================
 # 手续费规则分类与计算
 # ============================================================
 
-# A~M 各类精确匹配串 (必须与 VBA 原值逐字一致, 含全角标点)
+# A~N 各类精确匹配串 (必须与 VBA 原值逐字一致, 含全角标点)
 _RULE_SETS = {
     "A": {
         "只有代工费", "只有管理费，没有工资", "只有代工费，没有工资", "不扣手续费",
@@ -104,11 +248,13 @@ _RULE_SETS = {
     "K": {"除邮政，中信外都扣"},
     "L": {"中信不扣，其他都扣"},
     "M": {"签浙江锦途：招商、建设不扣；签温州驰锦：民生不扣"},
+    # N-全扣: 所有银行都扣手续费 (2026-10-26 补齐, 此前缺失导致该规则的项目手续费留空)
+    "N": {"所有银行都扣手续费"},
 }
 
 
 def classify_rule_exact(rule_text):
-    """将规则文本精确匹配到类别 A~M; 未命中返回空串 (与 VBA ClassifyRuleExact 等价)"""
+    """将规则文本精确匹配到类别 A~N; 未命中返回空串 (与 VBA ClassifyRuleExact 等价)"""
     s = remove_spaces(rule_text)
     for cat, sset in _RULE_SETS.items():
         if s in sset:
@@ -141,6 +287,9 @@ def is_bank_exempt(category, bank_name):
         return ("邮政" in b) or ("邮储" in b) or ("中信银行" in b)
     if category == "L":
         return "中信银行" in b
+    # N-全扣: 所有银行都不免除 (对齐 VBA IsBankExempt 的 Case "N")
+    if category == "N":
+        return False
     return False
 
 
@@ -346,7 +495,7 @@ def scan_excel_files(root, recursive=True, exclude_paths=None):
 def _read_payroll_file(fpath):
     """读取单个工作簿的个税统计表 + 员工信息表 (纯 openpyxl, data_only)
 
-    返回: (src_headers, src_rows, col_name, col_id, col_gjj, col_pay,
+    返回: (src_headers, src_rows, src_cols, col_name, col_id, col_gjj, col_pay,
            info_lookup, info_found, warns)
     若无"个税统计"表返回 None; 若缺关键列抛 ValueError。
     """
@@ -429,18 +578,20 @@ def _read_payroll_file(fpath):
             if i > src_cols:
                 break
             ht = remove_spaces(h) if h is not None else ""
+            if ht == "":
+                continue
             if ht == "姓名":
                 col_name = i
             elif ht == "身份证":
                 col_id = i
             elif ht == "公积金":
                 col_gjj = i
-            elif ht == "发薪单位":
+            # 发薪单位: 先别名归并(发薪公司→发薪单位), 再兼容「发放公司」写法。
+            # 「发放公司」不进汇总表(忽略名单), 但 M 类双单位规则仍需要它判定发薪单位。
+            elif col_pay == 0 and (alias_name(ht) == "发薪单位" or ht == "发放公司"):
                 col_pay = i
 
-        if col_gjj == 0:
-            wb.close()
-            raise ValueError("表头缺少「公积金」列")
+        # 2026-10-26: 公积金列不再强制要求 (对齐 VBA —— 缺列留空, 不整簿跳过)
         if col_name == 0 or col_id == 0:
             wb.close()
             raise ValueError("表头缺少「姓名」或「身份证」列")
@@ -449,6 +600,7 @@ def _read_payroll_file(fpath):
                        for i in range(1, src_cols + 1)]
 
         src_rows = []
+        last_non_blank = -1
         for r in rows[1:]:
             rr = list(r)
             if len(rr) < src_cols:
@@ -456,9 +608,15 @@ def _read_payroll_file(fpath):
             else:
                 rr = rr[:src_cols]
             src_rows.append(rr)
+            if any(v is not None and remove_spaces(str(v)) != "" for v in rr):
+                last_non_blank = len(src_rows) - 1
+        # 裁掉尾部「仅格式无值」的行 (对应 VBA src_rows = SheetRow - 1),
+        # 否则这些行会以空白数据进入汇总并被标成「不采用」
+        if last_non_blank + 1 < len(src_rows):
+            src_rows = src_rows[:last_non_blank + 1]
 
         wb.close()
-        return (src_headers, src_rows, col_name, col_id, col_gjj, col_pay,
+        return (src_headers, src_rows, src_cols, col_name, col_id, col_gjj, col_pay,
                 info_lookup, info_found, warns)
     except Exception:
         if wb is not None:
@@ -501,10 +659,11 @@ def run_merge_collect(scan_root, rules_path, cancel_event=None,
       cancel_event threading.Event, 置位则中止
       on_log/on_progress/on_done 回调
     结果经 on_done 返回 dict:
-      header        输出表头(list)
+      header        输出表头(list，19 列白名单 + 白名单外新列，尾部空列已压缩)
       rows          汇总数据(list[list])
       target_id_col 身份证列在 header 中的 1-based 位置
-      total_files / total_rows / skipped / errors / empty_keyword_ops / missing_ops
+      total_files / total_rows / skipped / rule_count
+      errors / empty_keyword_ops / missing_ops / skipped_columns
       output_path   固定为 None (本阶段不写文件, 由 GUI 弹出保存对话框后再调 write_merge_output)
     """
     if on_log is None:
@@ -517,9 +676,9 @@ def run_merge_collect(scan_root, rules_path, cancel_event=None,
         cancel_event = threading.Event()
 
     result = {"header": None, "rows": [], "target_id_col": None,
-              "total_files": 0, "total_rows": 0, "skipped": 0,
+              "total_files": 0, "total_rows": 0, "skipped": 0, "rule_count": 0,
               "errors": [], "empty_keyword_ops": set(), "missing_ops": set(),
-              "output_path": None}
+              "skipped_columns": set(), "output_path": None}
 
     # ---- 加载规则 ----
     try:
@@ -528,6 +687,7 @@ def run_merge_collect(scan_root, rules_path, cancel_event=None,
         on_log(f"⚠ 读取规则表失败: {e}")
         on_done(result)
         return
+    result["rule_count"] = len(fee_rules)
     if not fee_rules:
         on_log("⚠ 未加载到任何手续费规则, 手续费列将全部留空")
 
@@ -549,13 +709,18 @@ def run_merge_collect(scan_root, rules_path, cancel_event=None,
     result["total_files"] = len(file_list)
     missing_ops = result["missing_ops"]
 
-    # ---- 首文件模板 + 按列名映射(对齐 VBA: 表头以首文件为准, 后续文件按列名映射, 多余列丢弃) ----
-    # VBA 原始行为: 输出表头完全由首个有效文件决定, 后续文件多出的列不加入输出。
-    # 改进点: 不再要求后续文件列顺序/数量与首文件一致(否则大面积跳过),
-    #         而是按"归一化列名"做 name-based 映射到首文件模板。
-    template_headers = None   # 首文件的 src_headers (含第0列项目)
-    template_gjj = 0          # 首文件的公积金列号(1-based)
-    file_data = []            # 收集每个文件的数据
+    # ============================================================
+    # 输出列布局：固定 19 列白名单（对齐 VBA「按列名映射重写版」/ Java HbgsService）
+    #   · 源簿缺列 → 该列留空，不影响其他文件
+    #   · 白名单外的列 → 按「左邻/右邻」插入输出表并写表头
+    #   · 忽略名单（开户行/发放公司/电话号码）→ 整列跳过
+    #   · 末尾做「尾部压缩」，「采用/不采用」跟随最后一个有效列
+    # ============================================================
+    u_names = list(_STD_COLUMNS)
+    u_dict = _index_of(u_names)
+    all_rows = []
+    skipped_columns = result["skipped_columns"]
+    u_count = len(u_names)
 
     for idx, fpath in enumerate(file_list, start=1):
         if cancel_event.is_set():
@@ -577,98 +742,104 @@ def run_merge_collect(scan_root, rules_path, cancel_event=None,
             result["skipped"] += 1
             continue
 
-        (src_headers, src_rows, col_name, col_id, col_gjj, col_pay,
+        (src_headers, src_rows, src_cols, col_name, col_id, _col_gjj, col_pay,
          info_lookup, info_found, warns) = data
         for w in warns:
             on_log(w)
         if not info_found:
             on_log(f"⚠ {os.path.basename(fpath)} 无员工信息表, 手续费将留空")
 
-        # 首个有效文件 → 锁定模板
-        if template_headers is None:
-            template_headers = src_headers
-            template_gjj = col_gjj
+        # ---- ① 表头 → 本地列名：别名归并 + 生成列加「(源)」+ 同簿重名 #2 ----
+        loc = [""] * (src_cols + 1)
+        used_names = set()
+        for s in range(2, src_cols + 1):
+            nm = local_name(src_headers[s - 1] if s - 1 < len(src_headers) else None)
+            if nm:
+                if nm in used_names:
+                    c = 2
+                    while f"{nm}#{c}" in used_names:
+                        c += 1
+                    nm = f"{nm}#{c}"
+                used_names.add(nm)
+            loc[s] = nm
 
-        file_data.append({
-            "fname": os.path.splitext(os.path.basename(fpath))[0],
-            "src_headers": src_headers,
-            "src_rows": src_rows,
-            "cols": (col_name, col_id, col_gjj, col_pay),
-            "info_lookup": info_lookup,
-        })
+        # ---- ② 忽略名单 / 无表头告警 / 白名单外插列 ----
+        for s in range(2, src_cols + 1):
+            nm = loc[s]
+            if not nm:
+                # 表头空但列下有值 → 该列数据会丢，明确告警
+                if _column_has_data(src_rows, s - 1):
+                    on_log(f"⚠ {os.path.basename(fpath)}：第 {s} 列无表头，该列数据未汇总")
+                continue
+            if nm in _IGNORE_COLUMNS:
+                skipped_columns.add(nm)
+                continue
+            if nm in u_dict:
+                continue
+            pos = _resolve_insert_pos(loc, s, src_cols, u_dict, u_names)
+            u_names.insert(pos - 1, nm)
+            u_dict = _index_of(u_names)
+            # 等价 VBA 的 gS2.Columns(pos).Insert：已汇总的行整体右移一格
+            for r in all_rows:
+                r.insert(pos - 1, None)
+            on_log(f"⚠ {os.path.basename(fpath)}：新增列「{nm}」插入第 {pos} 列")
 
-    if not file_data or template_headers is None:
+        # ---- ③ 源列号 → 输出列号 ----
+        u_count = len(u_names)
+        g_idx = [0] * (src_cols + 1)
+        for s in range(2, src_cols + 1):
+            if loc[s]:
+                g_idx[s] = u_dict.get(loc[s], 0)
+        f_idx = u_dict["文件名"]
+        p_idx = u_dict["项目"]
+        id_idx = u_dict["身份证"]
+        fee_idx = u_dict["手续费"]
+        fname = os.path.splitext(os.path.basename(fpath))[0]
+
+        # ---- ④ 逐行落位 ----
+        for row in src_rows:
+            out = [None] * u_count
+            out[f_idx - 1] = fname
+            out[p_idx - 1] = clean_project_name(row[0] if len(row) > 0 else None)
+            for s in range(2, min(src_cols, len(row)) + 1):
+                if g_idx[s]:
+                    out[g_idx[s] - 1] = row[s - 1]
+            # 身份证文本化（防 18 位变科学计数法）
+            out[id_idx - 1] = _id_text(out[id_idx - 1])
+            # 手续费：引擎按「源表列号」取 姓名 / 身份证 / 发薪单位
+            name_v = row[col_name - 1] if (0 < col_name <= len(row)) else None
+            id_v = row[col_id - 1] if (0 < col_id <= len(row)) else None
+            pay_v = row[col_pay - 1] if (0 < col_pay <= len(row)) else None
+            out[fee_idx - 1] = compute_fee_v2(name_v, id_v, pay_v, info_lookup,
+                                              fee_rules, missing_ops)
+            all_rows.append(out)
+
+    if not all_rows:
         on_log("没有有效数据可汇总！")
         on_done(result)
         return
 
-    # ---- 构建输出表头(与 VBA 一致): 文件名/项目 + 首文件除第1列外的列(公积金后插手续费) + 采用/不采用 ----
-    # 关键列 -> 稳定 key: 有列名用归一名, 无列名(空白表头)用位置占位 __pos_N__ (N=模板中的列序号)
-    # 这样空白表头列也能按位置正确取数, 不会丢数据。
-    def _col_key(header_text, pos):
-        norm = remove_spaces(header_text)
-        return norm if norm != "" else f"__pos_{pos}__"
+    # ---- ⑤ 尾部压缩：「采用/不采用」跟随最后一个有效列 ----
+    removed = _compact_tail(u_names, all_rows)
+    u_dict = _index_of(u_names)
+    u_count = len(u_names)
 
-    out_header = ["文件名", "项目"]
-    out_keys = ["_fname", "_proj"]
-    for i in range(1, len(template_headers)):
-        out_header.append(template_headers[i])
-        out_keys.append(_col_key(template_headers[i], i))
-        if remove_spaces(template_headers[i]) == "公积金":
-            out_header.append("手续费")
-            out_keys.append("_fee")
-    out_header.append("采用/不采用")
-    out_keys.append("_tag")
+    # ---- ⑥ 写「采用/不采用」----
+    tag_idx = u_dict["采用/不采用"]
+    name_out_idx = u_dict["姓名"]
+    id_out_idx = u_dict["身份证"]
+    for r in all_rows:
+        nv = r[name_out_idx - 1]
+        iv = r[id_out_idx - 1]
+        r[tag_idx - 1] = "不采用" if (_is_invalid_name_id(nv) or _is_invalid_name_id(iv)) else "采用"
 
-    # 用归一名查找(兼容表头中的空格/全角空格), 与 _read_payroll_file 保持一致
-    name_out_idx = next((i for i, h in enumerate(out_header) if remove_spaces(h) == "姓名"), None)
-    id_out_idx = next((i for i, h in enumerate(out_header) if remove_spaces(h) == "身份证"), None)
-    target_id_col = (id_out_idx + 1) if id_out_idx is not None else None
-
-    # ---- 逐文件映射数据 ----
-    all_rows = []
-    for fd in file_data:
-        fname = fd["fname"]
-        src_headers = fd["src_headers"]
-        src_rows = fd["src_rows"]
-        col_name, col_id, col_gjj, col_pay = fd["cols"]
-        info_lookup = fd["info_lookup"]
-
-        # 本文件: 稳定 key -> 源行 0-based 索引 (空白列用 __pos_N__ 位置占位)
-        src_key_to_idx = {}
-        for i in range(len(src_headers)):
-            src_key_to_idx[_col_key(src_headers[i], i)] = i
-
-        for row in src_rows:
-            proj = clean_project_name(row[0] if len(row) > 0 else None)
-            out = [fname, proj]
-            fee_computed = False
-            # 遍历除 文件名/项目(前2) 和 采用/不采用(末列) 外的输出列
-            for h, key in zip(out_header[2:-1], out_keys[2:-1]):
-                if key == "_fee":
-                    if not fee_computed:
-                        name_v = row[col_name - 1] if (col_name > 0 and col_name - 1 < len(row)) else None
-                        id_v = row[col_id - 1] if (col_id > 0 and col_id - 1 < len(row)) else None
-                        pay_v = row[col_pay - 1] if (col_pay > 0 and col_pay - 1 < len(row)) else None
-                        fee = compute_fee_v2(name_v, id_v, pay_v, info_lookup, fee_rules, missing_ops)
-                        out.append(fee)
-                        fee_computed = True
-                    continue
-                src_idx = src_key_to_idx.get(key)
-                val = row[src_idx] if (src_idx is not None and src_idx < len(row)) else None
-                out.append(val)
-
-            nv = out[name_out_idx] if (name_out_idx is not None and name_out_idx < len(out)) else None
-            iv = out[id_out_idx] if (id_out_idx is not None and id_out_idx < len(out)) else None
-            tag = "不采用" if (_is_invalid_name_id(nv) or _is_invalid_name_id(iv)) else "采用"
-            out.append(tag)
-            all_rows.append(out)
-
-    result["header"] = out_header
+    result["header"] = u_names
     result["rows"] = all_rows
-    result["target_id_col"] = target_id_col
+    result["target_id_col"] = u_dict["身份证"]
     result["total_rows"] = len(all_rows)
-    on_log(f"✔ 内存汇总完成: 共 {len(all_rows)} 条数据, 请在弹出的对话框中选择保存位置")
+    on_log(f"✔ 内存汇总完成: 共 {len(all_rows)} 条数据, 输出 {u_count} 列, 请在弹出的对话框中选择保存位置")
+    if removed:
+        on_log(f"列尾压缩：删除尾部 {removed} 个空列，「采用/不采用」位于第 {tag_idx} 列")
 
     # ---- 提示汇总①：规则表"扣费银行（多填）"列为空 (对应 VBA gEmptyKeywordOps) ----
     if empty_keyword_ops:
@@ -679,5 +850,10 @@ def run_merge_collect(scan_root, rules_path, cancel_event=None,
     if missing_ops:
         m_list = " ".join("[" + str(o) + "]" for o in sorted(missing_ops))
         on_log('【项目提示】以下运营项目在规则表中找不到，请在"收取银行手续费信息"工作表中填写运营项目及文本关键词：' + m_list)
+
+    # ---- 提示汇总③：被忽略名单整列跳过的源列 (对应 VBA gSkippedCols) ----
+    if skipped_columns:
+        s_list = " ".join("[" + str(o) + "]" for o in sorted(skipped_columns))
+        on_log("【已跳过列】以下源表列按忽略名单整列跳过，未汇总到结果表：" + s_list)
 
     on_done(result)
