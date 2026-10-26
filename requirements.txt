@@ -1,0 +1,16 @@
+# 桌面版依赖（Windows + Python 3.11+）
+# 安装：pip install -r requirements.txt
+
+# Excel 读写与批量数据处理
+openpyxl>=3.1
+pandas>=2.0
+numpy>=1.24
+
+# 界面
+customtkinter>=5.2
+
+# Word 文档合并
+python-docx>=1.1
+
+# PDF 转 Excel（仅「PDF转Excel」模块需要）
+pdfplumber>=0.10
