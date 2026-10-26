@@ -32,8 +32,8 @@
 在职行按月展开主在职剩余区间；离职行按月展开自己的短离职区间；其他状态行保留原行。
 
 【参数】
-- stat_month：统计截止月份 "YYYY-MM"，决定主在职终点上限和月份标记范围。
-- as_of_date：在职天数截止日；None 表示取今天。主在职终点 = min(月末, as_of)。
+- start_date：统计起始日期 "YYYY-MM-DD"，只输出该日期之后的在职月份。
+- end_date：统计截止日期 "YYYY-MM-DD"，主在职终点上限。
 - include_hire_day：True 表示入职当月含入职日；False（默认）从入职次日算起。
 =====================================================================
 """
@@ -56,11 +56,11 @@ CONFIG = {
     "col_id": "身份证号码",
     "col_status": "状态",
 
-    # 统计截止月份：格式 "YYYY-MM"
-    "stat_month": "2026-07",
+    # 统计起始日期：格式 "YYYY-MM-DD"
+    "start_date": "2026-08-01",
 
-    # 在职天数截止日：None / "today" / 空字符串 都表示今天
-    "as_of_date": None,
+    # 统计截止日期：格式 "YYYY-MM-DD"
+    "end_date": "2026-08-31",
 
     # 入职当月是否包含入职当天：False = 从入职次日算起（默认）
     "include_hire_day": False,
@@ -126,6 +126,14 @@ def merge_intervals(intervals: List[Tuple[date, date]]) -> List[Tuple[date, date
     return merged
 
 
+def month_in_range(ym: Tuple[int, int], range_start: date, range_end: date) -> bool:
+    """判断 (year, month) 是否与 [range_start, range_end] 区间有重叠。"""
+    y, m = ym
+    month_start = date(y, m, 1)
+    month_end = date(y, m, calendar.monthrange(y, m)[1])
+    return month_start <= range_end and month_end >= range_start
+
+
 # ------------------------- 核心算法 -------------------------
 def hire_start_date(hire: date, include_hire_day: bool) -> date:
     """根据 include_hire_day 返回区间起算日。"""
@@ -138,6 +146,8 @@ def compute_main_employment(
     stat_end: date,
     as_of: date,
     include_hire_day: bool,
+    range_start: date = None,
+    range_end: date = None,
 ) -> Dict[Tuple[int, int], int]:
     """
     计算某个人主在职区间扣除短离职后的年月天数。
@@ -149,6 +159,8 @@ def compute_main_employment(
     stat_end        : 统计截止月份月末
     as_of           : 在职天数截止日
     include_hire_day: 是否含入职当天
+    range_start     : 可选，只保留与该日期之后有重叠的月份
+    range_end       : 可选，只保留与该日期之前有重叠的月份
     """
     if not employed_hires:
         return {}
@@ -187,6 +199,12 @@ def compute_main_employment(
     for s, e in remaining:
         for k, v in days_by_month(s, e).items():
             result[k] = result.get(k, 0) + v
+
+    # 按日期范围过滤
+    if range_start is not None and range_end is not None:
+        result = {k: v for k, v in result.items()
+                  if month_in_range(k, range_start, range_end)}
+
     return result
 
 
@@ -261,7 +279,8 @@ def process(input_file: str, output_file: str, **options):
         "状态": col_status, "姓名": col_emp, "身份证": col_id,
         "入职": col_hire, "离职": col_dep,
     })
-    print("统计截止月份：", cfg["stat_month"],
+    print("起始日期：", cfg["start_date"],
+          " | 截止日期：", cfg["end_date"],
           " | 含入职日：", cfg["include_hire_day"])
     print("=" * 64)
 
@@ -277,18 +296,21 @@ def process(input_file: str, output_file: str, **options):
     if not col_id:
         print("⚠️ 未识别到『身份证号码』列，将仅按姓名分组。")
 
-    # 解析统计月末
-    sm = datetime.strptime(cfg["stat_month"], "%Y-%m").date()
-    stat_end = month_end(sm.year, sm.month)
+    # 解析起始日期和截止日期
+    raw_start = cfg.get("start_date")
+    raw_end = cfg.get("end_date")
+    range_start = datetime.strptime(raw_start, "%Y-%m-%d").date() if raw_start else None
+    range_end = datetime.strptime(raw_end, "%Y-%m-%d").date() if raw_end else date.today()
 
-    # 解析在职天数截止日
-    raw_as_of = cfg.get("as_of_date")
-    if raw_as_of in (None, "today", ""):
-        as_of = date.today()
-    else:
-        as_of = datetime.strptime(raw_as_of, "%Y-%m-%d").date()
+    if range_start and range_start > range_end:
+        print("❌ 起始日期不能晚于截止日期。")
+        return
 
-    print(f"在职天数截止日(as_of)：{as_of}（主在职终点不超过该日）")
+    # 统计月末用于截断离职行
+    stat_end = range_end
+
+    print(f"起始日期：{range_start}（仅输出该日期之后的月份）")
+    print(f"截止日期：{range_end}（主在职终点不超过该日）")
 
     # 解析日期列（保持原列，新增内部列）
     df["_hire"] = pd.to_datetime(df[col_hire], errors="coerce")
@@ -339,8 +361,8 @@ def process(input_file: str, output_file: str, **options):
                     # 离职行缺少入职日期：保留原行，0 天
                     leave_rows.append((idx, r, None, None))
                 else:
-                    # 截断到统计月末
-                    leave_end = min(depart, stat_end) if depart is not None else stat_end
+                    # 截断到截止日期
+                    leave_end = min(depart, range_end) if depart is not None else range_end
                     start, end = compute_leave_interval(hire, leave_end, include_hire_day)
                     leave_intervals.append((start, end))
                     leave_rows.append((idx, r, start, end))
@@ -350,7 +372,9 @@ def process(input_file: str, output_file: str, **options):
 
         # 计算该人主在职剩余区间（按年月聚合）
         main_days = compute_main_employment(
-            employed_hires, leave_intervals, stat_end, as_of, include_hire_day
+            employed_hires, leave_intervals, stat_end, range_end,
+            include_hire_day,
+            range_start=range_start, range_end=range_end
         )
 
         # 输出主在职结果到每个在职行
@@ -389,6 +413,9 @@ def process(input_file: str, output_file: str, **options):
             else:
                 month_days = days_by_month(start, end)
                 for (y, m), d in sorted(month_days.items()):
+                    # 过滤：只保留在日期范围内的月份
+                    if range_start and not month_in_range((y, m), range_start, range_end):
+                        continue
                     nr = r.to_dict()
                     nr["在职月份"] = pd.Timestamp(y, m, 1)
                     nr["在职天数"] = d

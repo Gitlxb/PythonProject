@@ -15,6 +15,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from .cf_gzbcf_hyp_gui import UnifiedSplitApp
+from .cf_xxj_hyp_gui import XXJSplitApp
 from .word_gui_hyp import WordMergeApp
 
 
@@ -25,6 +26,8 @@ class UnifiedHRTools:
     NAV_ITEMS = [
         {'id': 'salary_split', 'icon': '🧾', 'label': '工资表拆分',
          'desc': '按部门列将工资表拆分为独立Excel文件'},
+        {'id': 'xxj_split', 'icon': '🧧', 'label': '孝心金拆分',
+         'desc': '按运营中心列将孝心金表拆分为独立Excel文件'},
         {'id': 'word_merge', 'icon': '📝', 'label': 'Word 文档合并',
          'desc': '智能按目录层级合并，保留完整格式'},
     ]
@@ -120,8 +123,8 @@ class UnifiedHRTools:
         self.content_area = tk.Frame(container, bg='#F5F6FA')
         self.content_area.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
-        # 欢迎页面（默认）
-        self._show_welcome()
+        # 默认加载"工资表拆分"
+        self._switch_to('salary_split')
 
     def _show_welcome(self):
         """显示欢迎/占位页"""
@@ -171,6 +174,8 @@ class UnifiedHRTools:
 
         if item_id == 'salary_split':
             self._load_salary_split()
+        elif item_id == 'xxj_split':
+            self._load_xxj_split()
         elif item_id == 'word_merge':
             self._load_word_merge()
 
@@ -181,6 +186,14 @@ class UnifiedHRTools:
             self._content_widgets['salary_split'] = app
         except Exception as e:
             self._show_error("工资表拆分工具", str(e))
+
+    def _load_xxj_split(self):
+        """加载孝心金拆分工具（嵌入模式）"""
+        try:
+            app = XXJSplitApp(parent=self.content_area)
+            self._content_widgets['xxj_split'] = app
+        except Exception as e:
+            self._show_error("孝心金拆分工具", str(e))
 
     def _load_word_merge(self):
         """加载 Word 合并工具（嵌入模式）"""

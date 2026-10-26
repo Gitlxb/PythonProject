@@ -59,6 +59,10 @@ class YuzhiCore:
         mask2 = df[col_name['I']].astype(str).str.contains('驻厂', na=False)
         df.loc[mask2, col_name['E']] = 0
 
+        # I 列含"垫付" → 全局免扣（与"驻厂"同层，优先级一致）
+        mask2b = df[col_name['I']].astype(str).str.contains('垫付', na=False)
+        df.loc[mask2b, col_name['E']] = 0
+
         mask3 = (df[col_name['C']].astype(str).str.contains('伟明', na=False) &
                  df[col_name['H']].astype(str).str.contains('中信银行', na=False))
         df.loc[mask3, col_name['E']] = 0
@@ -83,20 +87,6 @@ class YuzhiCore:
         df.loc[mask_wz_cj_cmb, col_name['E']] = 0
         mask_wz_cj_other = mask_wz_cj & ~df[col_name['H']].astype(str).str.contains('民生银行', na=False)
         df.loc[mask_wz_cj_other, col_name['E']] = 5
-
-        # ============ 新增规则 2.2：运营中心 = 中铭工程 ============
-        # 招商银行 / 驻厂 / 垫付 不扣手续费
-        # 预支金额 ≤ 1000 扣 10 元；> 1000 按 1% 扣（其余银行且不满足免扣条件时）
-        mask_zm = df[col_name['C']].astype(str).str.contains('中铭工程', na=False)
-        mask_zm_cmb = mask_zm & df[col_name['H']].astype(str).str.contains('招商银行', na=False)
-        df.loc[mask_zm_cmb, col_name['E']] = 0
-        mask_zm_df = mask_zm & df[col_name['I']].astype(str).str.contains('垫付', na=False)
-        df.loc[mask_zm_df, col_name['E']] = 0
-        # 计费规则仅作用于 E 列仍为空的行（即未命中免扣条件）
-        mask_zm_le_1000 = mask_zm & (df[col_name['D']] <= 1000) & df[col_name['E']].isna()
-        df.loc[mask_zm_le_1000, col_name['E']] = 10
-        mask_zm_gt_1000 = mask_zm & (df[col_name['D']] > 1000) & df[col_name['E']].isna()
-        df.loc[mask_zm_gt_1000, col_name['E']] = df.loc[mask_zm_gt_1000, col_name['D']] * 0.01
 
         if progress_callback:
             progress_callback(35, "正在计算 E 列数值...")
@@ -226,13 +216,17 @@ class YuzhiCore:
                     for col in ['D', 'E', 'F', 'G', 'H', 'I']:
                         ws[f'{col}{row}'].fill = yellow_fill
 
+                # I 列含"垫付" → 全局免扣，标黄 D-I
+                if ws[f'I{row}'].value and '垫付' in str(ws[f'I{row}'].value):
+                    for col in ['D', 'E', 'F', 'G', 'H', 'I']:
+                        ws[f'{col}{row}'].fill = yellow_fill
+
                 if ws[f'H{row}'].value and '招商银行' in str(ws[f'H{row}'].value):
                     for col in ['D', 'E', 'F', 'G', 'H']:
                         ws[f'{col}{row}'].fill = yellow_fill
 
                 c_val = ws[f'C{row}'].value
                 h_val = ws[f'H{row}'].value
-                i_val = ws[f'I{row}'].value
                 if c_val and '伟明' in str(c_val) and h_val and '中信银行' in str(h_val):
                     for col in ['D', 'E', 'F', 'G', 'H']:
                         ws[f'{col}{row}'].fill = yellow_fill
@@ -249,14 +243,6 @@ class YuzhiCore:
                 # ★ 新增：温州长江汽车电子 + 民生银行（规则 2.1 免扣）
                 if c_val and '温州长江汽车电子' in str(c_val) and h_val and '民生银行' in str(h_val):
                     for col in ['D', 'E', 'F', 'G', 'H']:
-                        ws[f'{col}{row}'].fill = yellow_fill
-
-                # ★ 新增：中铭工程 免扣条件（规则 2.2）
-                if c_val and '中铭工程' in str(c_val) and h_val and '招商银行' in str(h_val):
-                    for col in ['D', 'E', 'F', 'G', 'H']:
-                        ws[f'{col}{row}'].fill = yellow_fill
-                if c_val and '中铭工程' in str(c_val) and i_val and '垫付' in str(i_val):
-                    for col in ['D', 'E', 'F', 'G', 'H', 'I']:
                         ws[f'{col}{row}'].fill = yellow_fill
 
             # 标记 J 列和 K 列的重复值
@@ -545,7 +531,7 @@ class YuzhiFrame(ttk.Frame):
             self.btn_process.config(state=tk.NORMAL)
             self.app.status_label.config(text="手续费预支处理 - 出错")
             self.log(f"[错误] {error_msg}")
-    
+
         # 后台处理函数
         def process_thread():
             try:

@@ -26,7 +26,7 @@ import traceback
 import tkinter as tk
 from tkinter import ttk, filedialog, scrolledtext, messagebox
 
-from tkcalendar import DateEntry
+from tkcalendar import Calendar
 
 from . import tenure_months_calculator as tmc
 
@@ -34,37 +34,90 @@ from . import tenure_months_calculator as tmc
 DONE_SIGNAL = object()
 
 
-class StatMonthPicker(ttk.Frame):
-    """截止年月份选择器：使用 tkcalendar.DateEntry，显示完整日期，程序取年月。"""
+class DatePicker(ttk.Frame):
+    """自定义日期选择器：Entry + 下拉按钮，点击弹出 Calendar 日历。"""
 
     def __init__(self, master=None, **kw):
         super().__init__(master, **kw)
-        self._entry = DateEntry(self, width=14, date_pattern="yyyy-mm-dd", locale="zh_CN")
+        self._date = None
+        self._popup = None
+        self._calendar = None
+
+        self._var = tk.StringVar(value="")
+        self._entry = ttk.Entry(self, textvariable=self._var, width=14, state="readonly")
         self._entry.pack(side=tk.LEFT)
 
-    def set_date(self, date: datetime.date):
-        self._entry.set_date(date)
-
-    def get_date(self) -> datetime.date:
-        return self._entry.get_date()
-
-    def get_ym(self) -> str:
-        return self.get_date().strftime("%Y-%m")
-
-
-class AsOfDatePicker(ttk.Frame):
-    """在职截止日选择器：使用 tkcalendar.DateEntry 标准日历下拉。"""
-
-    def __init__(self, master=None, **kw):
-        super().__init__(master, **kw)
-        self._entry = DateEntry(self, width=14, date_pattern="yyyy-mm-dd", locale="zh_CN")
-        self._entry.pack(side=tk.LEFT)
+        self._btn = ttk.Button(self, text="▼", width=3, command=self._toggle_popup)
+        self._btn.pack(side=tk.LEFT, padx=(2, 0))
 
     def set_date(self, date: datetime.date):
-        self._entry.set_date(date)
+        self._date = date
+        self._var.set(date.strftime("%Y-%m-%d"))
 
     def get_date(self) -> datetime.date:
-        return self._entry.get_date()
+        return self._date
+
+    def _toggle_popup(self):
+        if self._popup and self._popup.winfo_exists():
+            self._close_popup()
+        else:
+            self._open_popup()
+
+    def _open_popup(self):
+        self._close_popup()
+
+        self._popup = tk.Toplevel(self)
+        self._popup.title("选择日期")
+        self._popup.resizable(False, False)
+        self._popup.overrideredirect(False)
+        self._popup.transient(self.winfo_toplevel())
+
+        self._calendar = Calendar(
+            self._popup,
+            selectmode="day",
+            locale="zh_CN",
+            date_pattern="yyyy-mm-dd",
+        )
+        self._calendar.pack(padx=10, pady=10)
+
+        if self._date:
+            self._calendar.selection_set(self._date)
+
+        btn_frame = ttk.Frame(self._popup)
+        btn_frame.pack(pady=(0, 8))
+        ttk.Button(btn_frame, text="确定", command=self._on_select).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="取消", command=self._close_popup).pack(side=tk.LEFT, padx=4)
+
+        self._calendar.bind("<<CalendarSelected>>", lambda e: self._on_select())
+        self._popup.bind("<Escape>", lambda e: self._close_popup())
+
+        self._popup.update_idletasks()
+        self._popup.grab_set()
+
+    def _close_popup(self):
+        if self._popup and self._popup.winfo_exists():
+            self._popup.grab_release()
+            self._popup.destroy()
+        self._popup = None
+        self._calendar = None
+
+    def _on_select(self):
+        if self._calendar:
+            sel = self._calendar.selection_get()
+            if sel:
+                self._date = sel if isinstance(sel, datetime.date) else sel.date()
+                self._var.set(self._date.strftime("%Y-%m-%d"))
+        self._close_popup()
+
+
+class StatMonthPicker(DatePicker):
+    """起始日期选择器。"""
+    pass
+
+
+class AsOfDatePicker(DatePicker):
+    """截止日期选择器。"""
+    pass
 
 
 class StdoutRedirector:
@@ -112,31 +165,35 @@ class App:
         ttk.Entry(frm, textvariable=self.file_var, width=55).grid(row=0, column=1, sticky=tk.W+tk.E, padx=4)
         ttk.Button(frm, text="浏览...", command=self._browse_input).grid(row=0, column=2, sticky=tk.W, padx=4)
 
-        # 截止年月份：tkcalendar 下拉日历，显示完整日期，程序取年月
-        ttk.Label(frm, text="截止年月份：").grid(row=1, column=0, sticky=tk.W, pady=4)
+        # 起始日期：tkcalendar 下拉日历，返回完整日期
+        ttk.Label(frm, text="起始日期：").grid(row=1, column=0, sticky=tk.W, pady=4)
         self.stat_picker = StatMonthPicker(frm)
         self.stat_picker.grid(row=1, column=1, sticky=tk.W, padx=4)
-        # 读取默认统计月
-        default_stat = tmc.CONFIG.get("stat_month", "2026-07")
+        # 读取默认起始日期
+        default_start = tmc.CONFIG.get("start_date", "2026-08-01")
         try:
-            default_stat_date = datetime.datetime.strptime(default_stat, "%Y-%m").date()
-            self.stat_picker.set_date(default_stat_date)
+            default_start_date = datetime.datetime.strptime(default_start, "%Y-%m-%d").date()
+            self.stat_picker.set_date(default_start_date)
         except ValueError:
             pass
-        ttk.Label(frm, text="选择任意日期，程序自动取该年月作为统计截止月份",
-                  anchor=tk.W).grid(row=1, column=2, sticky=tk.W, padx=4, pady=4)
 
-        # 在职截止日：tkcalendar 标准下拉日历
-        ttk.Label(frm, text="在职截止日：").grid(row=2, column=0, sticky=tk.W, pady=4)
+        # 截止日期：tkcalendar 标准下拉日历
+        ttk.Label(frm, text="截止日期：").grid(row=2, column=0, sticky=tk.W, pady=4)
         self.asof_picker = AsOfDatePicker(frm)
         self.asof_picker.grid(row=2, column=1, sticky=tk.W, padx=4)
-        self.asof_picker.set_date(datetime.date.today())
-        ttk.Label(frm, text="默认今天（决定在职天数截到哪天）",
-                  anchor=tk.W).grid(row=2, column=2, sticky=tk.W, padx=4, pady=4)
+        default_end = tmc.CONFIG.get("end_date")
+        if default_end:
+            try:
+                default_end_date = datetime.datetime.strptime(default_end, "%Y-%m-%d").date()
+                self.asof_picker.set_date(default_end_date)
+            except ValueError:
+                self.asof_picker.set_date(datetime.date.today())
+        else:
+            self.asof_picker.set_date(datetime.date.today())
 
         # 合并选项
         self.merge_chk = ttk.Checkbutton(
-            frm, text="合并"'总在职天数'"列（数据量大时取消可加速）",
+            frm, text="合并"'员工总在职天数'"列（数据量大时取消可加速）",
             variable=self.merge_var)
         self.merge_chk.grid(row=3, column=1, sticky=tk.W, padx=4, pady=4)
 
@@ -192,13 +249,22 @@ class App:
             return
 
         # 参数校验与取值
-        stat_month = self.stat_picker.get_ym()
-        if not stat_month:
-            messagebox.showwarning("提示", "请选择截止年月份")
+        start_date = self.stat_picker.get_date()
+        if not start_date:
+            messagebox.showwarning("提示", "请选择起始日期")
             return
 
-        asof_date = self.asof_picker.get_date()
-        raw_asof = asof_date.strftime("%Y-%m-%d") if asof_date else None
+        end_date = self.asof_picker.get_date()
+        if not end_date:
+            messagebox.showwarning("提示", "请选择截止日期")
+            return
+
+        if start_date > end_date:
+            messagebox.showwarning("提示", "起始日期不能晚于截止日期")
+            return
+
+        raw_start = start_date.strftime("%Y-%m-%d")
+        raw_end = end_date.strftime("%Y-%m-%d")
 
         merge_total_days = self.merge_var.get()
 
@@ -206,17 +272,17 @@ class App:
         self._last_output = ""
         self._append_log("")
         self._append_log(f"开始处理：{path}")
-        self._append_log(f"截止年月份：{stat_month}  |  在职截止日：{raw_asof or '今天'}")
+        self._append_log(f"起始日期：{raw_start}  |  截止日期：{raw_end}")
         self._append_log(f"合并总在职天数列：{'是' if merge_total_days else '否'}\n")
 
         self.running = True
         self.start_btn.config(state=tk.DISABLED)
         self.status_var.set("处理中...")
 
-        threading.Thread(target=self._worker, args=(path, stat_month, raw_asof, merge_total_days), daemon=True).start()
+        threading.Thread(target=self._worker, args=(path, raw_start, raw_end, merge_total_days), daemon=True).start()
         self.container.after(80, self._poll)
 
-    def _worker(self, input_file: str, stat_month: str, raw_asof: str, merge_total_days: bool):
+    def _worker(self, input_file: str, raw_start: str, raw_end: str, merge_total_days: bool):
         old_stdout = sys.stdout
         sys.stdout = StdoutRedirector(self.log_q)
 
@@ -229,8 +295,8 @@ class App:
             tmc.process(
                 input_file=input_file,
                 output_file=temp_path,
-                stat_month=stat_month,
-                as_of_date=raw_asof if raw_asof else None,
+                start_date=raw_start,
+                end_date=raw_end,
                 merge_total_days=merge_total_days,
             )
             self.log_q.put("\n✅ 计算完成，等待选择保存位置...\n")

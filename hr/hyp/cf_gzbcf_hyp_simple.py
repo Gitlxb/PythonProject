@@ -24,11 +24,11 @@ TAX_FORMULA_FIELD_HEADERS = {
 
 
 class SplitGroupDialog(tk.Toplevel):
-    """选择拆分组合弹窗"""
+    """组合拆分弹窗"""
 
     def __init__(self, parent, all_values):
         super().__init__(parent)
-        self.title("选择拆分组合")
+        self.title("组合拆分")
         self.geometry("680x420")
         self.transient(parent)
         self.grab_set()
@@ -263,8 +263,8 @@ class SplitExcelApp:
         # 操作按钮
         btn_frame = tk.Frame(container)
         btn_frame.grid(row=3, column=0, columnspan=3, pady=15)
-        tk.Button(btn_frame, text="选择拆分", command=self._open_group_dialog, width=15).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="开始拆分", command=self._start_split, width=15).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="组合拆分", command=self._open_group_dialog, width=15).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="单个拆分", command=self._start_split, width=15).pack(side=tk.LEFT, padx=5)
         tk.Button(btn_frame, text="打开输出目录", command=self._open_output_dir, width=15).pack(side=tk.LEFT, padx=5)
 
         # 状态/日志
@@ -283,7 +283,7 @@ class SplitExcelApp:
             self.root.update_idletasks()
 
     def _open_group_dialog(self):
-        """打开选择拆分组合弹窗"""
+        """打开组合拆分组合弹窗"""
         if not self.wb or not self.ws:
             messagebox.showwarning("提示", "请先选择Excel文件和工作表，并选择拆分依据列。", parent=self._dialog_parent)
             return
@@ -320,7 +320,7 @@ class SplitExcelApp:
             for g in self.selected_groups:
                 group_desc.append("+".join(g))
             self._log(f"已设置组合: {', '.join(group_desc)}")
-            messagebox.showinfo("选择拆分", f"已创建 {len(self.selected_groups)} 个组合，未选择的值将单独拆分。", parent=self._dialog_parent)
+            messagebox.showinfo("组合拆分", f"已创建 {len(self.selected_groups)} 个组合，未组合的值将单独拆分。", parent=self._dialog_parent)
 
     def _open_output_dir(self):
         """打开拆分输出目录"""
@@ -503,7 +503,7 @@ class SplitExcelApp:
 
         col_text = self.combo_col.get()
         if not col_text:
-            messagebox.showwarning("提示", "请选择拆分依据列", parent=self._dialog_parent)
+            messagebox.showwarning("提示", "请组合拆分依据列", parent=self._dialog_parent)
             return
 
         self.split_col_idx = int(col_text.split(".")[0])

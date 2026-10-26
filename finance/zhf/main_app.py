@@ -58,7 +58,7 @@ class MainApp:
             {"key": "sjpp", "text": "📊 数据匹配", "desc": "完整版表格自动生成"},
             {"key": "wgl", "text": "📈 稳岗率计算", "desc": "驻场&项目经理分析"},
             {"key": "hbbg", "text": "📋 合并表格", "desc": "多Excel文件合并"},
-            {"key": "tenure", "text": "📅 在职月份计算", "desc": "员工在职月份/天数统计"},
+            {"key": "tenure", "text": "📅 员工在职月份计算", "desc": "员工在职月份/天数统计"},
         ]
 
         btn_container = tk.Frame(nav_frame, bg="#2c3e50")

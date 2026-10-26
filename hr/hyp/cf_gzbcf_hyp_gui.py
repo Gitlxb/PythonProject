@@ -83,7 +83,7 @@ class UnifiedSplitApp:
         # 当前使用提示标签
         self._hint_label = tk.Label(
             btn_bar,
-            text="当前使用：增强版",
+            text="当前使用：增强版（包含完整的公式，支持社保/公积金/个税公式）",
             font=("Microsoft YaHei", 10),
             bg="#f0f0f0", fg="#27ae60"
         )
@@ -134,7 +134,7 @@ class UnifiedSplitApp:
         self.frame_enhanced.pack(fill="both", expand=True)
         self._btn_enhanced.config(bg="#27ae60", fg="white")
         self._btn_simple.config(bg="#bdc3c7", fg="#333333")
-        self._hint_label.config(text="当前使用：增强版", fg="#27ae60")
+        self._hint_label.config(text="当前使用：增强版（包含完整的公式，支持社保/公积金/个税公式）", fg="#27ae60")
         self._current = "enhanced"
 
     def _show_simple(self):
@@ -145,7 +145,7 @@ class UnifiedSplitApp:
         self.frame_simple.pack(fill="both", expand=True)
         self._btn_simple.config(bg="#2980b9", fg="white")
         self._btn_enhanced.config(bg="#bdc3c7", fg="#333333")
-        self._hint_label.config(text="当前使用：简化版", fg="#2980b9")
+        self._hint_label.config(text="当前使用：简化版（仅个税公式）", fg="#2980b9")
         self._current = "simple"
 
 

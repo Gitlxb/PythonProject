@@ -99,9 +99,9 @@ class SplitExcelApp:
         # 操作按钮（居中）
         btn_frame = tk.Frame(container)
         btn_frame.grid(row=3, column=0, columnspan=3, pady=15)
-        self.btn_choose_group = tk.Button(btn_frame, text="选择拆分", command=self._choose_split_groups, width=15)
+        self.btn_choose_group = tk.Button(btn_frame, text="组合拆分", command=self._choose_split_groups, width=15)
         self.btn_choose_group.pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="开始拆分", command=self._start_split, width=15).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="单个拆分", command=self._start_split, width=15).pack(side=tk.LEFT, padx=5)
         self.btn_open_dir = tk.Button(btn_frame, text="打开输出目录", command=self._open_output_dir, state="disabled", width=15)
         self.btn_open_dir.pack(side=tk.LEFT, padx=5)
 
